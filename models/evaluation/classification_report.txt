@@ -1,0 +1,23 @@
+========================================================
+EVALUATION RESULTS
+========================================================
+Weights    : ..\models\cnn_best.weights.h5
+Threshold  : 0.5
+Eval size  : 100,000  (wedge=20,154, noise=79,846)
+
+ROC AUC    : 1.0000
+PR  AUC    : 1.0000
+
+              precision    recall  f1-score   support
+
+   Noise (0)     1.0000    1.0000    1.0000     79846
+   Wedge (1)     1.0000    1.0000    1.0000     20154
+
+    accuracy                         1.0000    100000
+   macro avg     1.0000    1.0000    1.0000    100000
+weighted avg     1.0000    1.0000    1.0000    100000
+
+Confusion matrix (threshold=0.5):
+  TN =  79,846   FP =       0
+  FN =       0   TP =  20,154
+========================================================

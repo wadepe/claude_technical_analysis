@@ -1,0 +1,63 @@
+# live-monitor.service
+#
+# systemd unit file for the rising-wedge live monitor.
+# Runs live_monitor.py continuously; restarts automatically on crash.
+#
+# Installation (run as root or with sudo):
+#   sudo cp live-monitor.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable live-monitor    # start at boot
+#   sudo systemctl start  live-monitor    # start now
+#
+# Useful commands:
+#   sudo systemctl status  live-monitor   # current state
+#   sudo systemctl restart live-monitor   # manual restart
+#   sudo systemctl stop    live-monitor   # clean stop (won't auto-restart)
+#   journalctl -u live-monitor -f         # tail live logs
+#   journalctl -u live-monitor --since today   # today's logs
+
+[Unit]
+Description=Rising Wedge Live Monitor (SPY 1-min)
+# Wait for network before starting so yfinance can reach the internet
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# ── Change these two lines to match your username and repo path ──────────────
+User=ubuntu
+WorkingDirectory=/home/ubuntu/claude_technical_analysis/source_code
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Use the virtualenv Python if one exists, otherwise fall back to system python3
+ExecStart=/bin/bash -c '\
+  if [ -f /home/ubuntu/claude_technical_analysis/.venv/bin/python ]; then \
+    /home/ubuntu/claude_technical_analysis/.venv/bin/python live_monitor.py; \
+  else \
+    python3 live_monitor.py; \
+  fi'
+
+# Restart on any exit (crash, OOM, unhandled exception).
+# systemctl stop sends SIGTERM which exits cleanly — systemd suppresses
+# the restart in that case even with Restart=always.
+Restart=always
+RestartSec=15
+
+# Give the process time to warm up TF before systemd declares it failed
+TimeoutStartSec=120
+
+# Cap restart attempts: if it fails 5 times within 10 minutes, stop retrying
+# and alert via the journal. This prevents a bad code push from hammering.
+StartLimitInterval=600
+StartLimitBurst=5
+
+# Stream logs to the system journal (view with journalctl -u live-monitor)
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=live-monitor
+
+# Ensure output is not buffered so log lines appear immediately
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target
