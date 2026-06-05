@@ -60,6 +60,7 @@ import pandas as pd
 PROJECT_ROOT = Path(__file__).parent.parent
 SPY_CSV      = PROJECT_ROOT / 'spy_data_1min.csv'
 WEDGE_CSV    = PROJECT_ROOT / 'rising_wedge.csv'
+CRASH_LOG    = PROJECT_ROOT / 'crash.log'
 
 # ── Market hours (US/Eastern) ─────────────────────────────────────────────────
 # Covers pre-market (4 AM), regular session (9:30 AM), after-hours (to 8 PM)
@@ -74,7 +75,57 @@ logging.basicConfig(
 )
 log = logging.getLogger('live_monitor')
 
+# Also mirror ERROR-level messages to crash.log on disk so crashes survive
+# across systemd restarts and are visible in the GitHub repo.
+_crash_file_handler = logging.FileHandler(CRASH_LOG, mode='a', encoding='utf-8')
+_crash_file_handler.setLevel(logging.ERROR)
+_crash_file_handler.setFormatter(logging.Formatter(
+    '%(asctime)s  %(levelname)-8s  %(message)s', datefmt='%Y-%m-%d %H:%M:%S'
+))
+log.addHandler(_crash_file_handler)
+
 FEATURE_COLS = ['open', 'high', 'low', 'close', 'volume']
+
+
+# =============================================================================
+# Crash logging
+# =============================================================================
+
+def _write_crash_entry(exc: BaseException, context: str = '') -> None:
+    """
+    Append a formatted crash entry to crash.log.
+
+    Called both from the inner exception handler (recoverable errors that are
+    retried) and from the top-level sys.excepthook (fatal unhandled exceptions).
+    Each entry is self-contained so the file remains readable after many crashes.
+    """
+    import traceback
+
+    try:
+        from zoneinfo import ZoneInfo
+        et_zone = ZoneInfo('America/New_York')
+    except ImportError:
+        import pytz
+        et_zone = pytz.timezone('America/New_York')
+
+    now_et  = datetime.now(et_zone).strftime('%Y-%m-%d %H:%M:%S ET')
+    tb_str  = ''.join(traceback.format_exception(type(exc), exc, exc.__traceback__))
+    divider = '=' * 72
+
+    entry = (
+        f'\n{divider}\n'
+        f'CRASH @ {now_et}\n'
+        + (f'Context: {context}\n' if context else '')
+        + f'{divider}\n'
+        f'{tb_str}'
+        f'{divider}\n'
+    )
+
+    try:
+        with open(CRASH_LOG, 'a', encoding='utf-8') as fh:
+            fh.write(entry)
+    except Exception:
+        pass   # never let crash-logging itself crash the process
 
 
 # =============================================================================
@@ -428,7 +479,9 @@ def run_live(ticker: str, threshold: float, dry_run: bool) -> None:
             log.info('Stopped by user.')
             break
         except Exception as exc:
-            log.error(f'Unhandled error: {exc}', exc_info=True)
+            context = f'Last bar: {bar["timestamp"] if bar else "none"}'
+            log.error(f'Unhandled error: {exc}  [{context}]', exc_info=True)
+            _write_crash_entry(exc, context=context)
             time.sleep(10)
 
 
@@ -519,5 +572,22 @@ def main() -> None:
         run_live(args.ticker, args.threshold, args.dry_run)
 
 
+def _excepthook(exc_type, exc_value, exc_tb) -> None:
+    """Catch any exception that escapes main() and write it to crash.log."""
+    if issubclass(exc_type, KeyboardInterrupt):
+        sys.__excepthook__(exc_type, exc_value, exc_tb)
+        return
+    log.critical('Fatal unhandled exception', exc_info=(exc_type, exc_value, exc_tb))
+    _write_crash_entry(exc_value, context='fatal — process exiting')
+
+
+sys.excepthook = _excepthook
+
+
 if __name__ == '__main__':
-    main()
+    try:
+        main()
+    except Exception as exc:
+        # Catches failures during startup (model load, CSV init, etc.)
+        _write_crash_entry(exc, context='startup failure')
+        raise

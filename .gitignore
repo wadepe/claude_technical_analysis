@@ -46,6 +46,8 @@ pipeline_*.log
 training*.log
 corpus_generation*.log
 add_btc_negatives.log
+# crash.log is the exception — it is tracked so server crashes are visible on GitHub
+!crash.log
 
 # Claude internal config
 .claude/

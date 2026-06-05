@@ -1,0 +1,3 @@
+# crash.log — rising-wedge live monitor
+# Unhandled exceptions are appended here with full traceback and ET timestamp.
+# Pushed to GitHub nightly at 7 PM ET alongside spy_data_1min.csv.
