@@ -81,8 +81,8 @@ fi
 "$VENV_DIR/bin/pip" install \
     tensorflow \
     yfinance \
-    pandas \
-    numpy \
+    "pandas==2.0.3" \
+    "numpy==1.26.4" \
     scikit-learn \
     pyarrow \
     matplotlib \
@@ -91,6 +91,11 @@ fi
 # pandas_market_calendars: NYSE holiday / half-day calendar for live_monitor.py.
 # Pinned to 4.6.1 because it imports on any Python 3.9+ (5.x requires 3.10+).
 # If this venv is Python 3.10+, the pin still works; drop it for the latest 5.x.
+#
+# pandas / numpy are pinned to versions that publish cp39 + manylinux2014
+# (glibc 2.17) wheels, so pip installs prebuilt binaries instead of compiling
+# from source. Newer releases can require a newer glibc than this host (16.04 =
+# glibc 2.23) or modern build tooling, which triggers "metadata-generation-failed".
 
 echo "  Python dependencies installed."
 echo ""
