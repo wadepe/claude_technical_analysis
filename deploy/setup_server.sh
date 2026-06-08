@@ -41,11 +41,35 @@ echo ""
 
 # ── 1. Python virtualenv + dependencies ──────────────────────────────────────
 echo "[1/5] Setting up Python virtualenv ..."
+
+# A venv left over from a failed run (or created without pip because the
+# python3-venv package was missing) must be rebuilt, not reused — otherwise
+# the pip calls below fail with a confusing 'no such file' three steps later.
+if [ -d "$VENV_DIR" ] && [ ! -x "$VENV_DIR/bin/pip" ]; then
+    echo "  Existing virtualenv at $VENV_DIR has no pip — removing it to rebuild."
+    rm -rf "$VENV_DIR"
+fi
+
 if [ ! -d "$VENV_DIR" ]; then
-    $PYTHON -m venv "$VENV_DIR"
+    if ! $PYTHON -m venv "$VENV_DIR"; then
+        echo "ERROR: '$PYTHON -m venv' failed. On Debian/Ubuntu the venv module"
+        echo "ships separately — install it and re-run this script:"
+        echo "  sudo apt update && sudo apt install -y python3-venv python3-pip"
+        exit 1
+    fi
     echo "  Created virtualenv at $VENV_DIR"
 else
     echo "  Virtualenv already exists."
+fi
+
+# venv can exit 0 yet produce no pip when ensurepip is unavailable (the
+# python3-venv package is missing). Fail loudly with the fix instead of
+# limping into the pip install below.
+if [ ! -x "$VENV_DIR/bin/pip" ]; then
+    echo "ERROR: $VENV_DIR/bin/pip was not created — the python3-venv package is"
+    echo "likely missing. Install it, then re-run this script:"
+    echo "  sudo apt update && sudo apt install -y python3-venv python3-pip"
+    exit 1
 fi
 
 "$VENV_DIR/bin/pip" install --upgrade pip --quiet
