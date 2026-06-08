@@ -177,7 +177,7 @@ if systemctl is-active --quiet "$SERVICE_NAME"; then
     echo ""
     echo "  Deployment workflow:"
     echo "    1. Edit code on dev laptop"
-    echo "    2. git push origin main"
+    echo "    2. git push origin master"
     echo "    3. Server auto-pulls at 3 PM and restarts if .py/.h5 changed"
     echo ""
 else

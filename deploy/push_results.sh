@@ -12,7 +12,7 @@ set -euo pipefail
 
 REPO_DIR="/home/ubuntu/claude_technical_analysis"
 LOG_TAG="push_results"
-BRANCH="main"
+BRANCH="master"
 
 log() { echo "$(date '+%Y-%m-%d %H:%M:%S')  [$LOG_TAG]  $*"; }
 

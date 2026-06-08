@@ -16,7 +16,7 @@ set -euo pipefail
 
 REPO_DIR="/home/ubuntu/claude_technical_analysis"
 SERVICE="live-monitor"
-BRANCH="main"
+BRANCH="master"
 LOG_TAG="pull_updates"
 
 log() { echo "$(date '+%Y-%m-%d %H:%M:%S')  [$LOG_TAG]  $*"; }
