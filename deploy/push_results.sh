@@ -24,10 +24,25 @@ if ! git -C "$REPO_DIR" rev-parse --is-inside-work-tree &>/dev/null; then
     exit 1
 fi
 
+# ── Regenerate the daily chart before staging ─────────────────────────────────
+# Use the virtualenv Python if present (matches live-monitor.service), else
+# system python3. A chart failure must NOT abort the data push, so we tolerate
+# a non-zero exit here despite 'set -e'.
+if [ -x "$REPO_DIR/.venv/bin/python" ]; then
+    PY="$REPO_DIR/.venv/bin/python"
+else
+    PY="python3"
+fi
+if "$PY" "$REPO_DIR/source_code/plot_daily.py" --data-dir "$REPO_DIR"; then
+    log "Daily chart regenerated."
+else
+    log "WARNING: chart generation failed — pushing data without an updated chart."
+fi
+
 # ── Stage only the data output files ─────────────────────────────────────────
-# We intentionally do NOT do 'git add -A' — only the two result CSVs go to
+# We intentionally do NOT do 'git add -A' — only the result files go to
 # GitHub from the server.  Code changes flow the other direction (dev → server).
-DATA_FILES=("spy_data_1min.csv" "rising_wedge.csv" "crash.log")
+DATA_FILES=("spy_data_1min.csv" "rising_wedge.csv" "rising_wedge_chart.png" "crash.log")
 STAGED=0
 for f in "${DATA_FILES[@]}"; do
     if [ -f "$REPO_DIR/$f" ]; then

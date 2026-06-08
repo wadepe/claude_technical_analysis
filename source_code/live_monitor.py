@@ -39,6 +39,20 @@ Usage
 
   # Dry-run: print what would be written without touching the CSVs
   python live_monitor.py --dry-run
+
+Requirements
+------------
+  pip install numpy pandas yfinance
+  pip install pandas_market_calendars   # NYSE holiday / half-day calendar
+
+  Pick the version against the deployment venv's Python (check: python3 --version):
+    Python 3.9        -> pandas_market_calendars==4.6.1   (5.x needs 3.10+)
+    Python 3.10+      -> 4.6.1 also works, or drop the pin for the latest 5.x
+    Universal pin     -> ==4.6.1 imports on any 3.9+, safe regardless of version
+
+  On Ubuntu the system tz database is present, so zoneinfo resolves natively
+  (no separate tzdata install needed). If pandas_market_calendars is absent the
+  monitor still runs but only skips weekends, not holidays.
 """
 
 from __future__ import annotations
@@ -63,9 +77,13 @@ WEDGE_CSV    = PROJECT_ROOT / 'rising_wedge.csv'
 CRASH_LOG    = PROJECT_ROOT / 'crash.log'
 
 # ── Market hours (US/Eastern) ─────────────────────────────────────────────────
-# Covers pre-market (4 AM), regular session (9:30 AM), after-hours (to 8 PM)
-MARKET_OPEN_H  = 4    # 4:00 AM ET
-MARKET_CLOSE_H = 20   # 8:00 PM ET
+# Covers pre-market (4 AM), regular session (9:30 AM-4:00 PM), after-hours (to 8 PM).
+# On a normal day the after-hours cutoff is the regular close (4 PM) +
+# AFTERHOURS_BUFFER_H, which reproduces the historical 8 PM cutoff. On an
+# early-close half-day (1 PM close) it shrinks to 5 PM automatically.
+MARKET_OPEN_H       = 4    # 4:00 AM ET  pre-market open
+MARKET_CLOSE_H      = 20   # 8:00 PM ET  fallback close (calendar unavailable)
+AFTERHOURS_BUFFER_H = 4    # hours of after-hours polling past the regular close
 
 # ── Logging setup ─────────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -88,6 +106,30 @@ FEATURE_COLS = ['open', 'high', 'low', 'close', 'volume']
 
 
 # =============================================================================
+# Timezone helper
+# =============================================================================
+
+_ET_ZONE = None   # cached America/New_York tzinfo
+
+
+def _et_zone():
+    """Return a cached America/New_York tzinfo (zoneinfo, or pytz fallback)."""
+    global _ET_ZONE
+    if _ET_ZONE is None:
+        try:
+            from zoneinfo import ZoneInfo
+            _ET_ZONE = ZoneInfo('America/New_York')
+        except Exception:
+            # zoneinfo missing (Python < 3.9) OR no system tz database — the
+            # latter is the norm on Windows, where ZoneInfo raises
+            # ZoneInfoNotFoundError (a KeyError, not ImportError). Fall back to
+            # pytz, which bundles its own copy of the tz data.
+            import pytz
+            _ET_ZONE = pytz.timezone('America/New_York')
+    return _ET_ZONE
+
+
+# =============================================================================
 # Crash logging
 # =============================================================================
 
@@ -101,14 +143,7 @@ def _write_crash_entry(exc: BaseException, context: str = '') -> None:
     """
     import traceback
 
-    try:
-        from zoneinfo import ZoneInfo
-        et_zone = ZoneInfo('America/New_York')
-    except ImportError:
-        import pytz
-        et_zone = pytz.timezone('America/New_York')
-
-    now_et  = datetime.now(et_zone).strftime('%Y-%m-%d %H:%M:%S ET')
+    now_et  = datetime.now(_et_zone()).strftime('%Y-%m-%d %H:%M:%S ET')
     tb_str  = ''.join(traceback.format_exception(type(exc), exc, exc.__traceback__))
     divider = '=' * 72
 
@@ -257,23 +292,92 @@ def _fetch_bar_yfinance(ticker: str) -> Optional[dict]:
 
 
 # =============================================================================
-# Market-hours check
+# Market-hours check  (NYSE trading calendar via pandas_market_calendars)
 # =============================================================================
 
-def _is_market_open() -> bool:
-    """Return True if current ET time is within extended market hours on a weekday."""
-    try:
-        from zoneinfo import ZoneInfo
-        et_zone = ZoneInfo('America/New_York')
-    except ImportError:
-        # Python < 3.9 fallback (requires pytz)
-        import pytz
-        et_zone = pytz.timezone('America/New_York')
+# Sentinel: the calendar package is unavailable, so callers should fall back
+# to the original weekday-only check. Distinct from None (= closed today).
+_CAL_UNAVAILABLE = object()
 
-    now_et = datetime.now(et_zone)
-    if now_et.weekday() >= 5:   # Saturday=5, Sunday=6
-        return False
-    return MARKET_OPEN_H <= now_et.hour < MARKET_CLOSE_H
+_NYSE_CAL        = None    # lazily-created pandas_market_calendars calendar
+_NYSE_CAL_FAILED = False   # True once import/creation has failed (warn once)
+_SESSION_CACHE   = {}      # date -> (open_et, close_et) | None ; one query per day
+
+
+def _get_nyse_calendar():
+    """Lazily create and cache the NYSE calendar. Returns None if unavailable."""
+    global _NYSE_CAL, _NYSE_CAL_FAILED
+    if _NYSE_CAL is not None:
+        return _NYSE_CAL
+    if _NYSE_CAL_FAILED:
+        return None
+    try:
+        import pandas_market_calendars as mcal
+        _NYSE_CAL = mcal.get_calendar('NYSE')
+    except Exception as exc:
+        _NYSE_CAL_FAILED = True
+        log.warning(
+            f'pandas_market_calendars unavailable ({exc}); falling back to '
+            f'weekday-only check — HOLIDAYS WILL NOT BE SKIPPED. '
+            f'Install with: pip install pandas_market_calendars'
+        )
+    return _NYSE_CAL
+
+
+def _nyse_session_today(now_et):
+    """
+    Return today's regular NYSE session as (open_et, close_et) datetimes,
+    None if the market is fully closed today (weekend/holiday), or
+    _CAL_UNAVAILABLE if the calendar package could not be loaded.
+
+    Cached per calendar date so the calendar is queried at most once a day.
+    """
+    cal = _get_nyse_calendar()
+    if cal is None:
+        return _CAL_UNAVAILABLE
+
+    today = now_et.date()
+    if today not in _SESSION_CACHE:
+        sched = cal.schedule(start_date=str(today), end_date=str(today))
+        if sched.empty:
+            _SESSION_CACHE[today] = None                       # closed today
+        else:
+            tz = now_et.tzinfo
+            _SESSION_CACHE[today] = (
+                sched.iloc[0]['market_open'].tz_convert(tz),
+                sched.iloc[0]['market_close'].tz_convert(tz),
+            )
+    return _SESSION_CACHE[today]
+
+
+def _is_market_open() -> bool:
+    """
+    Return True if we should be polling right now.
+
+    Skips weekends and NYSE holidays via the trading calendar, and shortens
+    the after-hours window on early-close half-days (the cutoff is the regular
+    session close + AFTERHOURS_BUFFER_H). Falls back to the original weekday +
+    fixed-hours check if pandas_market_calendars is not installed.
+    """
+    now_et  = datetime.now(_et_zone())
+    session = _nyse_session_today(now_et)
+
+    if session is _CAL_UNAVAILABLE:
+        # Calendar package missing — original behaviour (weekends only).
+        if now_et.weekday() >= 5:        # Saturday=5, Sunday=6
+            return False
+        return MARKET_OPEN_H <= now_et.hour < MARKET_CLOSE_H
+
+    if session is None:
+        return False                     # weekend or market holiday
+
+    # Trading day: poll from pre-market open through the after-hours buffer.
+    _open_et, close_et = session
+    premarket_open = now_et.replace(
+        hour=MARKET_OPEN_H, minute=0, second=0, microsecond=0
+    )
+    post_close = close_et + timedelta(hours=AFTERHOURS_BUFFER_H)
+    return premarket_open <= now_et < post_close
 
 
 # =============================================================================
@@ -406,7 +510,15 @@ def run_live(ticker: str, threshold: float, dry_run: bool) -> None:
     last_ts = _last_timestamp()
     log.info(f'Last CSV timestamp: {last_ts or "none (fresh start)"}')
     log.info(f'Monitoring {ticker}  |  threshold={threshold}  |  '
-             f'extended hours {MARKET_OPEN_H}:00-{MARKET_CLOSE_H}:00 ET')
+             f'extended hours from {MARKET_OPEN_H}:00 ET')
+
+    # Surface calendar status now so the operator knows whether holidays are
+    # being skipped, instead of finding out at the first market-hours check.
+    if _get_nyse_calendar() is not None:
+        log.info('NYSE trading calendar active — weekends, holidays, and '
+                 'early-close half-days will be skipped.')
+    # (a warning is already logged by _get_nyse_calendar if it is unavailable)
+
     log.info('Press Ctrl-C to stop.\n')
 
     while True:

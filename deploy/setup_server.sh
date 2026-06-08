@@ -57,7 +57,11 @@ fi
     scikit-learn \
     pyarrow \
     matplotlib \
+    "pandas_market_calendars==4.6.1" \
     --quiet
+# pandas_market_calendars: NYSE holiday / half-day calendar for live_monitor.py.
+# Pinned to 4.6.1 because it imports on any Python 3.9+ (5.x requires 3.10+).
+# If this venv is Python 3.10+, the pin still works; drop it for the latest 5.x.
 
 echo "  Python dependencies installed."
 echo ""
