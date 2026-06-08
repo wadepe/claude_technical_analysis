@@ -25,7 +25,12 @@ REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SERVICE_NAME="live-monitor"
 GITHUB_USER="YOUR_GITHUB_USERNAME"       # <-- change this
 GITHUB_REPO="claude_technical_analysis"  # <-- change this if repo name differs
-PYTHON="python3"
+# Interpreter used to build the venv. Defaults to python3, but can be overridden
+# at run time without editing this file (keeps the working tree clean for the
+# nightly git pull). On boxes whose system python3 is too old, point it at a
+# pyenv build, e.g.:
+#   PYTHON=~/.pyenv/versions/3.9.19/bin/python ./setup_server.sh
+PYTHON="${PYTHON:-python3}"
 # ─────────────────────────────────────────────────────────────────────────────
 
 DEPLOY_DIR="$REPO_DIR/deploy"
