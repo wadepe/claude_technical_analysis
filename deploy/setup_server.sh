@@ -76,6 +76,26 @@ if [ ! -x "$VENV_DIR/bin/pip" ]; then
     exit 1
 fi
 
+# ── Verify the interpreter version is in TensorFlow's supported range ─────────
+# TF only ships wheels for specific Python versions and lags new releases, so a
+# too-new interpreter (e.g. a fresh Ubuntu's default python3) — or one too old —
+# fails deep in pip with a cryptic "Could not find a version that satisfies the
+# requirement tensorflow". Catch it here with actionable guidance instead.
+# Bump PY_MAX_MINOR once TF publishes wheels for a newer Python.
+PY_MIN_MINOR=9
+PY_MAX_MINOR=12
+PY_MINOR=$("$VENV_DIR/bin/python" -c 'import sys; print(sys.version_info[1])')
+PY_VER=$("$VENV_DIR/bin/python" -c 'import sys; print("%d.%d" % sys.version_info[:2])')
+if [ "$PY_MINOR" -lt "$PY_MIN_MINOR" ] || [ "$PY_MAX_MINOR" -lt "$PY_MINOR" ]; then
+    echo "ERROR: venv Python is $PY_VER, but TensorFlow only publishes wheels for"
+    echo "3.$PY_MIN_MINOR through 3.$PY_MAX_MINOR. Rebuild the venv against a supported"
+    echo "interpreter via the PYTHON override, e.g.:"
+    echo "  rm -rf \"$VENV_DIR\""
+    echo "  PYTHON=python3.12 ./deploy/setup_server.sh"
+    echo "(If TF now supports 3.$PY_MINOR, raise PY_MAX_MINOR near the top of this block.)"
+    exit 1
+fi
+
 "$VENV_DIR/bin/pip" install --upgrade pip --quiet
 "$VENV_DIR/bin/pip" install \
     tensorflow \
