@@ -45,11 +45,6 @@ Requirements
   pip install numpy pandas yfinance
   pip install pandas_market_calendars   # NYSE holiday / half-day calendar
 
-  Pick the version against the deployment venv's Python (check: python3 --version):
-    Python 3.9        -> pandas_market_calendars==4.6.1   (5.x needs 3.10+)
-    Python 3.10+      -> 4.6.1 also works, or drop the pin for the latest 5.x
-    Universal pin     -> ==4.6.1 imports on any 3.9+, safe regardless of version
-
   On Ubuntu the system tz database is present, so zoneinfo resolves natively
   (no separate tzdata install needed). If pandas_market_calendars is absent the
   monitor still runs but only skips weekends, not holidays.

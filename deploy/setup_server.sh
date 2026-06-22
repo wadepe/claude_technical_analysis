@@ -27,9 +27,8 @@ GITHUB_USER="YOUR_GITHUB_USERNAME"       # <-- change this
 GITHUB_REPO="claude_technical_analysis"  # <-- change this if repo name differs
 # Interpreter used to build the venv. Defaults to python3, but can be overridden
 # at run time without editing this file (keeps the working tree clean for the
-# nightly git pull). On boxes whose system python3 is too old, point it at a
-# pyenv build, e.g.:
-#   PYTHON=~/.pyenv/versions/3.9.19/bin/python ./setup_server.sh
+# nightly git pull), e.g. to pick a specific version:
+#   PYTHON=python3.12 ./setup_server.sh
 PYTHON="${PYTHON:-python3}"
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -81,21 +80,14 @@ fi
 "$VENV_DIR/bin/pip" install \
     tensorflow \
     yfinance \
-    "pandas==2.0.3" \
-    "numpy==1.26.4" \
+    pandas \
+    numpy \
     scikit-learn \
     pyarrow \
     matplotlib \
-    "pandas_market_calendars==4.6.1" \
+    pandas_market_calendars \
     --quiet
 # pandas_market_calendars: NYSE holiday / half-day calendar for live_monitor.py.
-# Pinned to 4.6.1 because it imports on any Python 3.9+ (5.x requires 3.10+).
-# If this venv is Python 3.10+, the pin still works; drop it for the latest 5.x.
-#
-# pandas / numpy are pinned to versions that publish cp39 + manylinux2014
-# (glibc 2.17) wheels, so pip installs prebuilt binaries instead of compiling
-# from source. Newer releases can require a newer glibc than this host (16.04 =
-# glibc 2.23) or modern build tooling, which triggers "metadata-generation-failed".
 
 echo "  Python dependencies installed."
 echo ""
