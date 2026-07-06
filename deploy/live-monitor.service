@@ -59,5 +59,10 @@ SyslogIdentifier=live-monitor
 # Ensure output is not buffered so log lines appear immediately
 Environment=PYTHONUNBUFFERED=1
 
+# CPU-only deployment: skip TensorFlow's GPU probe (avoids the harmless
+# "cuInit: UNKNOWN ERROR (303)" line) and quiet its info/warning log spam.
+Environment=CUDA_VISIBLE_DEVICES=-1
+Environment=TF_CPP_MIN_LOG_LEVEL=2
+
 [Install]
 WantedBy=multi-user.target
