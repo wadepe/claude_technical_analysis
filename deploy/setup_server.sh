@@ -113,6 +113,17 @@ echo "  Python dependencies installed."
 echo ""
 
 # ── 2. SSH key for GitHub ─────────────────────────────────────────────────────
+# Only touch SSH keys and the git remote when GITHUB_USER is a real account.
+# With the placeholder left in, rewriting origin would point it at
+# git@github.com:YOUR_GITHUB_USERNAME/... and break every future pull and push.
+if [ "$GITHUB_USER" = "YOUR_GITHUB_USERNAME" ]; then
+    echo "[2/5] GITHUB_USER not set — skipping SSH key + remote setup."
+    echo "  Leaving the existing git remote untouched:"
+    echo "    $(git remote get-url origin 2>/dev/null || echo '(none)')"
+    echo "  Set GITHUB_USER at the top of this script to switch origin to an SSH"
+    echo "  deploy key (needed for the nightly result push over SSH)."
+    echo ""
+else
 echo "[2/5] Checking SSH key for GitHub ..."
 SSH_KEY="$HOME/.ssh/id_ed25519"
 if [ ! -f "$SSH_KEY" ]; then
@@ -149,6 +160,7 @@ if echo "$CURRENT_REMOTE" | grep -q "https://"; then
     echo "  Switched remote to SSH: $(git remote get-url origin)"
 else
     echo "  Remote already uses SSH: $CURRENT_REMOTE"
+fi
 fi
 echo ""
 
