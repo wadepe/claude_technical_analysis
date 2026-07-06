@@ -1,3 +1,948 @@
 # crash.log — rising-wedge live monitor
 # Unhandled exceptions are appended here with full traceback and ET timestamp.
 # Pushed to GitHub nightly at 7 PM ET alongside spy_data_1min.csv.
+
+========================================================================
+CRASH @ 2026-06-22 02:22:47 ET
+Context: startup failure
+========================================================================
+Traceback (most recent call last):
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 696, in <module>
+    main()
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 679, in main
+    run_live(args.ticker, args.threshold, args.dry_run)
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 489, in run_live
+    m, nb = _load_model(w)
+            ^^^^^^^^^^^^^^
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 183, in _load_model
+    model.load_weights(str(wp))
+  File "/home/wpearce/claude_technical_analysis/.venv/lib/python3.12/site-packages/keras/src/utils/traceback_utils.py", line 122, in error_handler
+    raise e.with_traceback(filtered_tb) from None
+  File "/home/wpearce/claude_technical_analysis/.venv/lib/python3.12/site-packages/keras/src/saving/saving_lib.py", line 642, in _raise_loading_failure
+    raise ValueError(msg)
+ValueError: A total of 14 objects could not be loaded. Example error message for object <Conv1D name=conv1a, built=True>:
+
+Layer 'conv1a' expected 1 variables, but received 0 variables during loading. Expected: ['kernel']
+
+List of objects that could not be loaded:
+[<Conv1D name=conv1a, built=True>, <BatchNormalization name=bn1a, built=True>, <Conv1D name=conv1b, built=True>, <BatchNormalization name=bn1b, built=True>, <Conv1D name=conv2a, built=True>, <BatchNormalization name=bn2a, built=True>, <Conv1D name=conv2b, built=True>, <BatchNormalization name=bn2b, built=True>, <Conv1D name=conv3a, built=True>, <BatchNormalization name=bn3a, built=True>, <Conv1D name=conv3b, built=True>, <BatchNormalization name=bn3b, built=True>, <Dense name=dense1, built=True>, <Dense name=output, built=True>]
+========================================================================
+2026-06-22 06:22:47  CRITICAL  Fatal unhandled exception
+Traceback (most recent call last):
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 696, in <module>
+    main()
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 679, in main
+    run_live(args.ticker, args.threshold, args.dry_run)
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 489, in run_live
+    m, nb = _load_model(w)
+            ^^^^^^^^^^^^^^
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 183, in _load_model
+    model.load_weights(str(wp))
+  File "/home/wpearce/claude_technical_analysis/.venv/lib/python3.12/site-packages/keras/src/utils/traceback_utils.py", line 122, in error_handler
+    raise e.with_traceback(filtered_tb) from None
+  File "/home/wpearce/claude_technical_analysis/.venv/lib/python3.12/site-packages/keras/src/saving/saving_lib.py", line 642, in _raise_loading_failure
+    raise ValueError(msg)
+ValueError: A total of 14 objects could not be loaded. Example error message for object <Conv1D name=conv1a, built=True>:
+
+Layer 'conv1a' expected 1 variables, but received 0 variables during loading. Expected: ['kernel']
+
+List of objects that could not be loaded:
+[<Conv1D name=conv1a, built=True>, <BatchNormalization name=bn1a, built=True>, <Conv1D name=conv1b, built=True>, <BatchNormalization name=bn1b, built=True>, <Conv1D name=conv2a, built=True>, <BatchNormalization name=bn2a, built=True>, <Conv1D name=conv2b, built=True>, <BatchNormalization name=bn2b, built=True>, <Conv1D name=conv3a, built=True>, <BatchNormalization name=bn3a, built=True>, <Conv1D name=conv3b, built=True>, <BatchNormalization name=bn3b, built=True>, <Dense name=dense1, built=True>, <Dense name=output, built=True>]
+
+========================================================================
+CRASH @ 2026-06-22 02:22:47 ET
+Context: fatal — process exiting
+========================================================================
+Traceback (most recent call last):
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 696, in <module>
+    main()
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 679, in main
+    run_live(args.ticker, args.threshold, args.dry_run)
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 489, in run_live
+    m, nb = _load_model(w)
+            ^^^^^^^^^^^^^^
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 183, in _load_model
+    model.load_weights(str(wp))
+  File "/home/wpearce/claude_technical_analysis/.venv/lib/python3.12/site-packages/keras/src/utils/traceback_utils.py", line 122, in error_handler
+    raise e.with_traceback(filtered_tb) from None
+  File "/home/wpearce/claude_technical_analysis/.venv/lib/python3.12/site-packages/keras/src/saving/saving_lib.py", line 642, in _raise_loading_failure
+    raise ValueError(msg)
+ValueError: A total of 14 objects could not be loaded. Example error message for object <Conv1D name=conv1a, built=True>:
+
+Layer 'conv1a' expected 1 variables, but received 0 variables during loading. Expected: ['kernel']
+
+List of objects that could not be loaded:
+[<Conv1D name=conv1a, built=True>, <BatchNormalization name=bn1a, built=True>, <Conv1D name=conv1b, built=True>, <BatchNormalization name=bn1b, built=True>, <Conv1D name=conv2a, built=True>, <BatchNormalization name=bn2a, built=True>, <Conv1D name=conv2b, built=True>, <BatchNormalization name=bn2b, built=True>, <Conv1D name=conv3a, built=True>, <BatchNormalization name=bn3a, built=True>, <Conv1D name=conv3b, built=True>, <BatchNormalization name=bn3b, built=True>, <Dense name=dense1, built=True>, <Dense name=output, built=True>]
+========================================================================
+
+========================================================================
+CRASH @ 2026-06-22 02:23:08 ET
+Context: startup failure
+========================================================================
+Traceback (most recent call last):
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 696, in <module>
+    main()
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 679, in main
+    run_live(args.ticker, args.threshold, args.dry_run)
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 489, in run_live
+    m, nb = _load_model(w)
+            ^^^^^^^^^^^^^^
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 183, in _load_model
+    model.load_weights(str(wp))
+  File "/home/wpearce/claude_technical_analysis/.venv/lib/python3.12/site-packages/keras/src/utils/traceback_utils.py", line 122, in error_handler
+    raise e.with_traceback(filtered_tb) from None
+  File "/home/wpearce/claude_technical_analysis/.venv/lib/python3.12/site-packages/keras/src/saving/saving_lib.py", line 642, in _raise_loading_failure
+    raise ValueError(msg)
+ValueError: A total of 14 objects could not be loaded. Example error message for object <Conv1D name=conv1a, built=True>:
+
+Layer 'conv1a' expected 1 variables, but received 0 variables during loading. Expected: ['kernel']
+
+List of objects that could not be loaded:
+[<Conv1D name=conv1a, built=True>, <BatchNormalization name=bn1a, built=True>, <Conv1D name=conv1b, built=True>, <BatchNormalization name=bn1b, built=True>, <Conv1D name=conv2a, built=True>, <BatchNormalization name=bn2a, built=True>, <Conv1D name=conv2b, built=True>, <BatchNormalization name=bn2b, built=True>, <Conv1D name=conv3a, built=True>, <BatchNormalization name=bn3a, built=True>, <Conv1D name=conv3b, built=True>, <BatchNormalization name=bn3b, built=True>, <Dense name=dense1, built=True>, <Dense name=output, built=True>]
+========================================================================
+2026-06-22 06:23:08  CRITICAL  Fatal unhandled exception
+Traceback (most recent call last):
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 696, in <module>
+    main()
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 679, in main
+    run_live(args.ticker, args.threshold, args.dry_run)
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 489, in run_live
+    m, nb = _load_model(w)
+            ^^^^^^^^^^^^^^
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 183, in _load_model
+    model.load_weights(str(wp))
+  File "/home/wpearce/claude_technical_analysis/.venv/lib/python3.12/site-packages/keras/src/utils/traceback_utils.py", line 122, in error_handler
+    raise e.with_traceback(filtered_tb) from None
+  File "/home/wpearce/claude_technical_analysis/.venv/lib/python3.12/site-packages/keras/src/saving/saving_lib.py", line 642, in _raise_loading_failure
+    raise ValueError(msg)
+ValueError: A total of 14 objects could not be loaded. Example error message for object <Conv1D name=conv1a, built=True>:
+
+Layer 'conv1a' expected 1 variables, but received 0 variables during loading. Expected: ['kernel']
+
+List of objects that could not be loaded:
+[<Conv1D name=conv1a, built=True>, <BatchNormalization name=bn1a, built=True>, <Conv1D name=conv1b, built=True>, <BatchNormalization name=bn1b, built=True>, <Conv1D name=conv2a, built=True>, <BatchNormalization name=bn2a, built=True>, <Conv1D name=conv2b, built=True>, <BatchNormalization name=bn2b, built=True>, <Conv1D name=conv3a, built=True>, <BatchNormalization name=bn3a, built=True>, <Conv1D name=conv3b, built=True>, <BatchNormalization name=bn3b, built=True>, <Dense name=dense1, built=True>, <Dense name=output, built=True>]
+
+========================================================================
+CRASH @ 2026-06-22 02:23:08 ET
+Context: fatal — process exiting
+========================================================================
+Traceback (most recent call last):
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 696, in <module>
+    main()
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 679, in main
+    run_live(args.ticker, args.threshold, args.dry_run)
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 489, in run_live
+    m, nb = _load_model(w)
+            ^^^^^^^^^^^^^^
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 183, in _load_model
+    model.load_weights(str(wp))
+  File "/home/wpearce/claude_technical_analysis/.venv/lib/python3.12/site-packages/keras/src/utils/traceback_utils.py", line 122, in error_handler
+    raise e.with_traceback(filtered_tb) from None
+  File "/home/wpearce/claude_technical_analysis/.venv/lib/python3.12/site-packages/keras/src/saving/saving_lib.py", line 642, in _raise_loading_failure
+    raise ValueError(msg)
+ValueError: A total of 14 objects could not be loaded. Example error message for object <Conv1D name=conv1a, built=True>:
+
+Layer 'conv1a' expected 1 variables, but received 0 variables during loading. Expected: ['kernel']
+
+List of objects that could not be loaded:
+[<Conv1D name=conv1a, built=True>, <BatchNormalization name=bn1a, built=True>, <Conv1D name=conv1b, built=True>, <BatchNormalization name=bn1b, built=True>, <Conv1D name=conv2a, built=True>, <BatchNormalization name=bn2a, built=True>, <Conv1D name=conv2b, built=True>, <BatchNormalization name=bn2b, built=True>, <Conv1D name=conv3a, built=True>, <BatchNormalization name=bn3a, built=True>, <Conv1D name=conv3b, built=True>, <BatchNormalization name=bn3b, built=True>, <Dense name=dense1, built=True>, <Dense name=output, built=True>]
+========================================================================
+
+========================================================================
+CRASH @ 2026-06-22 02:23:28 ET
+Context: startup failure
+========================================================================
+Traceback (most recent call last):
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 696, in <module>
+    main()
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 679, in main
+    run_live(args.ticker, args.threshold, args.dry_run)
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 489, in run_live
+    m, nb = _load_model(w)
+            ^^^^^^^^^^^^^^
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 183, in _load_model
+    model.load_weights(str(wp))
+  File "/home/wpearce/claude_technical_analysis/.venv/lib/python3.12/site-packages/keras/src/utils/traceback_utils.py", line 122, in error_handler
+    raise e.with_traceback(filtered_tb) from None
+  File "/home/wpearce/claude_technical_analysis/.venv/lib/python3.12/site-packages/keras/src/saving/saving_lib.py", line 642, in _raise_loading_failure
+    raise ValueError(msg)
+ValueError: A total of 14 objects could not be loaded. Example error message for object <Conv1D name=conv1a, built=True>:
+
+Layer 'conv1a' expected 1 variables, but received 0 variables during loading. Expected: ['kernel']
+
+List of objects that could not be loaded:
+[<Conv1D name=conv1a, built=True>, <BatchNormalization name=bn1a, built=True>, <Conv1D name=conv1b, built=True>, <BatchNormalization name=bn1b, built=True>, <Conv1D name=conv2a, built=True>, <BatchNormalization name=bn2a, built=True>, <Conv1D name=conv2b, built=True>, <BatchNormalization name=bn2b, built=True>, <Conv1D name=conv3a, built=True>, <BatchNormalization name=bn3a, built=True>, <Conv1D name=conv3b, built=True>, <BatchNormalization name=bn3b, built=True>, <Dense name=dense1, built=True>, <Dense name=output, built=True>]
+========================================================================
+2026-06-22 06:23:28  CRITICAL  Fatal unhandled exception
+Traceback (most recent call last):
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 696, in <module>
+    main()
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 679, in main
+    run_live(args.ticker, args.threshold, args.dry_run)
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 489, in run_live
+    m, nb = _load_model(w)
+            ^^^^^^^^^^^^^^
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 183, in _load_model
+    model.load_weights(str(wp))
+  File "/home/wpearce/claude_technical_analysis/.venv/lib/python3.12/site-packages/keras/src/utils/traceback_utils.py", line 122, in error_handler
+    raise e.with_traceback(filtered_tb) from None
+  File "/home/wpearce/claude_technical_analysis/.venv/lib/python3.12/site-packages/keras/src/saving/saving_lib.py", line 642, in _raise_loading_failure
+    raise ValueError(msg)
+ValueError: A total of 14 objects could not be loaded. Example error message for object <Conv1D name=conv1a, built=True>:
+
+Layer 'conv1a' expected 1 variables, but received 0 variables during loading. Expected: ['kernel']
+
+List of objects that could not be loaded:
+[<Conv1D name=conv1a, built=True>, <BatchNormalization name=bn1a, built=True>, <Conv1D name=conv1b, built=True>, <BatchNormalization name=bn1b, built=True>, <Conv1D name=conv2a, built=True>, <BatchNormalization name=bn2a, built=True>, <Conv1D name=conv2b, built=True>, <BatchNormalization name=bn2b, built=True>, <Conv1D name=conv3a, built=True>, <BatchNormalization name=bn3a, built=True>, <Conv1D name=conv3b, built=True>, <BatchNormalization name=bn3b, built=True>, <Dense name=dense1, built=True>, <Dense name=output, built=True>]
+
+========================================================================
+CRASH @ 2026-06-22 02:23:28 ET
+Context: fatal — process exiting
+========================================================================
+Traceback (most recent call last):
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 696, in <module>
+    main()
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 679, in main
+    run_live(args.ticker, args.threshold, args.dry_run)
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 489, in run_live
+    m, nb = _load_model(w)
+            ^^^^^^^^^^^^^^
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 183, in _load_model
+    model.load_weights(str(wp))
+  File "/home/wpearce/claude_technical_analysis/.venv/lib/python3.12/site-packages/keras/src/utils/traceback_utils.py", line 122, in error_handler
+    raise e.with_traceback(filtered_tb) from None
+  File "/home/wpearce/claude_technical_analysis/.venv/lib/python3.12/site-packages/keras/src/saving/saving_lib.py", line 642, in _raise_loading_failure
+    raise ValueError(msg)
+ValueError: A total of 14 objects could not be loaded. Example error message for object <Conv1D name=conv1a, built=True>:
+
+Layer 'conv1a' expected 1 variables, but received 0 variables during loading. Expected: ['kernel']
+
+List of objects that could not be loaded:
+[<Conv1D name=conv1a, built=True>, <BatchNormalization name=bn1a, built=True>, <Conv1D name=conv1b, built=True>, <BatchNormalization name=bn1b, built=True>, <Conv1D name=conv2a, built=True>, <BatchNormalization name=bn2a, built=True>, <Conv1D name=conv2b, built=True>, <BatchNormalization name=bn2b, built=True>, <Conv1D name=conv3a, built=True>, <BatchNormalization name=bn3a, built=True>, <Conv1D name=conv3b, built=True>, <BatchNormalization name=bn3b, built=True>, <Dense name=dense1, built=True>, <Dense name=output, built=True>]
+========================================================================
+
+========================================================================
+CRASH @ 2026-06-22 02:23:49 ET
+Context: startup failure
+========================================================================
+Traceback (most recent call last):
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 696, in <module>
+    main()
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 679, in main
+    run_live(args.ticker, args.threshold, args.dry_run)
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 489, in run_live
+    m, nb = _load_model(w)
+            ^^^^^^^^^^^^^^
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 183, in _load_model
+    model.load_weights(str(wp))
+  File "/home/wpearce/claude_technical_analysis/.venv/lib/python3.12/site-packages/keras/src/utils/traceback_utils.py", line 122, in error_handler
+    raise e.with_traceback(filtered_tb) from None
+  File "/home/wpearce/claude_technical_analysis/.venv/lib/python3.12/site-packages/keras/src/saving/saving_lib.py", line 642, in _raise_loading_failure
+    raise ValueError(msg)
+ValueError: A total of 14 objects could not be loaded. Example error message for object <Conv1D name=conv1a, built=True>:
+
+Layer 'conv1a' expected 1 variables, but received 0 variables during loading. Expected: ['kernel']
+
+List of objects that could not be loaded:
+[<Conv1D name=conv1a, built=True>, <BatchNormalization name=bn1a, built=True>, <Conv1D name=conv1b, built=True>, <BatchNormalization name=bn1b, built=True>, <Conv1D name=conv2a, built=True>, <BatchNormalization name=bn2a, built=True>, <Conv1D name=conv2b, built=True>, <BatchNormalization name=bn2b, built=True>, <Conv1D name=conv3a, built=True>, <BatchNormalization name=bn3a, built=True>, <Conv1D name=conv3b, built=True>, <BatchNormalization name=bn3b, built=True>, <Dense name=dense1, built=True>, <Dense name=output, built=True>]
+========================================================================
+2026-06-22 06:23:49  CRITICAL  Fatal unhandled exception
+Traceback (most recent call last):
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 696, in <module>
+    main()
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 679, in main
+    run_live(args.ticker, args.threshold, args.dry_run)
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 489, in run_live
+    m, nb = _load_model(w)
+            ^^^^^^^^^^^^^^
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 183, in _load_model
+    model.load_weights(str(wp))
+  File "/home/wpearce/claude_technical_analysis/.venv/lib/python3.12/site-packages/keras/src/utils/traceback_utils.py", line 122, in error_handler
+    raise e.with_traceback(filtered_tb) from None
+  File "/home/wpearce/claude_technical_analysis/.venv/lib/python3.12/site-packages/keras/src/saving/saving_lib.py", line 642, in _raise_loading_failure
+    raise ValueError(msg)
+ValueError: A total of 14 objects could not be loaded. Example error message for object <Conv1D name=conv1a, built=True>:
+
+Layer 'conv1a' expected 1 variables, but received 0 variables during loading. Expected: ['kernel']
+
+List of objects that could not be loaded:
+[<Conv1D name=conv1a, built=True>, <BatchNormalization name=bn1a, built=True>, <Conv1D name=conv1b, built=True>, <BatchNormalization name=bn1b, built=True>, <Conv1D name=conv2a, built=True>, <BatchNormalization name=bn2a, built=True>, <Conv1D name=conv2b, built=True>, <BatchNormalization name=bn2b, built=True>, <Conv1D name=conv3a, built=True>, <BatchNormalization name=bn3a, built=True>, <Conv1D name=conv3b, built=True>, <BatchNormalization name=bn3b, built=True>, <Dense name=dense1, built=True>, <Dense name=output, built=True>]
+
+========================================================================
+CRASH @ 2026-06-22 02:23:49 ET
+Context: fatal — process exiting
+========================================================================
+Traceback (most recent call last):
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 696, in <module>
+    main()
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 679, in main
+    run_live(args.ticker, args.threshold, args.dry_run)
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 489, in run_live
+    m, nb = _load_model(w)
+            ^^^^^^^^^^^^^^
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 183, in _load_model
+    model.load_weights(str(wp))
+  File "/home/wpearce/claude_technical_analysis/.venv/lib/python3.12/site-packages/keras/src/utils/traceback_utils.py", line 122, in error_handler
+    raise e.with_traceback(filtered_tb) from None
+  File "/home/wpearce/claude_technical_analysis/.venv/lib/python3.12/site-packages/keras/src/saving/saving_lib.py", line 642, in _raise_loading_failure
+    raise ValueError(msg)
+ValueError: A total of 14 objects could not be loaded. Example error message for object <Conv1D name=conv1a, built=True>:
+
+Layer 'conv1a' expected 1 variables, but received 0 variables during loading. Expected: ['kernel']
+
+List of objects that could not be loaded:
+[<Conv1D name=conv1a, built=True>, <BatchNormalization name=bn1a, built=True>, <Conv1D name=conv1b, built=True>, <BatchNormalization name=bn1b, built=True>, <Conv1D name=conv2a, built=True>, <BatchNormalization name=bn2a, built=True>, <Conv1D name=conv2b, built=True>, <BatchNormalization name=bn2b, built=True>, <Conv1D name=conv3a, built=True>, <BatchNormalization name=bn3a, built=True>, <Conv1D name=conv3b, built=True>, <BatchNormalization name=bn3b, built=True>, <Dense name=dense1, built=True>, <Dense name=output, built=True>]
+========================================================================
+
+========================================================================
+CRASH @ 2026-06-22 02:24:10 ET
+Context: startup failure
+========================================================================
+Traceback (most recent call last):
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 696, in <module>
+    main()
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 679, in main
+    run_live(args.ticker, args.threshold, args.dry_run)
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 489, in run_live
+    m, nb = _load_model(w)
+            ^^^^^^^^^^^^^^
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 183, in _load_model
+    model.load_weights(str(wp))
+  File "/home/wpearce/claude_technical_analysis/.venv/lib/python3.12/site-packages/keras/src/utils/traceback_utils.py", line 122, in error_handler
+    raise e.with_traceback(filtered_tb) from None
+  File "/home/wpearce/claude_technical_analysis/.venv/lib/python3.12/site-packages/keras/src/saving/saving_lib.py", line 642, in _raise_loading_failure
+    raise ValueError(msg)
+ValueError: A total of 14 objects could not be loaded. Example error message for object <Conv1D name=conv1a, built=True>:
+
+Layer 'conv1a' expected 1 variables, but received 0 variables during loading. Expected: ['kernel']
+
+List of objects that could not be loaded:
+[<Conv1D name=conv1a, built=True>, <BatchNormalization name=bn1a, built=True>, <Conv1D name=conv1b, built=True>, <BatchNormalization name=bn1b, built=True>, <Conv1D name=conv2a, built=True>, <BatchNormalization name=bn2a, built=True>, <Conv1D name=conv2b, built=True>, <BatchNormalization name=bn2b, built=True>, <Conv1D name=conv3a, built=True>, <BatchNormalization name=bn3a, built=True>, <Conv1D name=conv3b, built=True>, <BatchNormalization name=bn3b, built=True>, <Dense name=dense1, built=True>, <Dense name=output, built=True>]
+========================================================================
+2026-06-22 06:24:10  CRITICAL  Fatal unhandled exception
+Traceback (most recent call last):
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 696, in <module>
+    main()
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 679, in main
+    run_live(args.ticker, args.threshold, args.dry_run)
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 489, in run_live
+    m, nb = _load_model(w)
+            ^^^^^^^^^^^^^^
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 183, in _load_model
+    model.load_weights(str(wp))
+  File "/home/wpearce/claude_technical_analysis/.venv/lib/python3.12/site-packages/keras/src/utils/traceback_utils.py", line 122, in error_handler
+    raise e.with_traceback(filtered_tb) from None
+  File "/home/wpearce/claude_technical_analysis/.venv/lib/python3.12/site-packages/keras/src/saving/saving_lib.py", line 642, in _raise_loading_failure
+    raise ValueError(msg)
+ValueError: A total of 14 objects could not be loaded. Example error message for object <Conv1D name=conv1a, built=True>:
+
+Layer 'conv1a' expected 1 variables, but received 0 variables during loading. Expected: ['kernel']
+
+List of objects that could not be loaded:
+[<Conv1D name=conv1a, built=True>, <BatchNormalization name=bn1a, built=True>, <Conv1D name=conv1b, built=True>, <BatchNormalization name=bn1b, built=True>, <Conv1D name=conv2a, built=True>, <BatchNormalization name=bn2a, built=True>, <Conv1D name=conv2b, built=True>, <BatchNormalization name=bn2b, built=True>, <Conv1D name=conv3a, built=True>, <BatchNormalization name=bn3a, built=True>, <Conv1D name=conv3b, built=True>, <BatchNormalization name=bn3b, built=True>, <Dense name=dense1, built=True>, <Dense name=output, built=True>]
+
+========================================================================
+CRASH @ 2026-06-22 02:24:10 ET
+Context: fatal — process exiting
+========================================================================
+Traceback (most recent call last):
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 696, in <module>
+    main()
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 679, in main
+    run_live(args.ticker, args.threshold, args.dry_run)
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 489, in run_live
+    m, nb = _load_model(w)
+            ^^^^^^^^^^^^^^
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 183, in _load_model
+    model.load_weights(str(wp))
+  File "/home/wpearce/claude_technical_analysis/.venv/lib/python3.12/site-packages/keras/src/utils/traceback_utils.py", line 122, in error_handler
+    raise e.with_traceback(filtered_tb) from None
+  File "/home/wpearce/claude_technical_analysis/.venv/lib/python3.12/site-packages/keras/src/saving/saving_lib.py", line 642, in _raise_loading_failure
+    raise ValueError(msg)
+ValueError: A total of 14 objects could not be loaded. Example error message for object <Conv1D name=conv1a, built=True>:
+
+Layer 'conv1a' expected 1 variables, but received 0 variables during loading. Expected: ['kernel']
+
+List of objects that could not be loaded:
+[<Conv1D name=conv1a, built=True>, <BatchNormalization name=bn1a, built=True>, <Conv1D name=conv1b, built=True>, <BatchNormalization name=bn1b, built=True>, <Conv1D name=conv2a, built=True>, <BatchNormalization name=bn2a, built=True>, <Conv1D name=conv2b, built=True>, <BatchNormalization name=bn2b, built=True>, <Conv1D name=conv3a, built=True>, <BatchNormalization name=bn3a, built=True>, <Conv1D name=conv3b, built=True>, <BatchNormalization name=bn3b, built=True>, <Dense name=dense1, built=True>, <Dense name=output, built=True>]
+========================================================================
+
+========================================================================
+CRASH @ 2026-06-22 02:57:05 ET
+Context: startup failure
+========================================================================
+Traceback (most recent call last):
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 696, in <module>
+    main()
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 679, in main
+    run_live(args.ticker, args.threshold, args.dry_run)
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 489, in run_live
+    m, nb = _load_model(w)
+            ^^^^^^^^^^^^^^
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 183, in _load_model
+    model.load_weights(str(wp))
+  File "/home/wpearce/claude_technical_analysis/.venv/lib/python3.11/site-packages/keras/src/utils/traceback_utils.py", line 70, in error_handler
+    raise e.with_traceback(filtered_tb) from None
+  File "/home/wpearce/claude_technical_analysis/.venv/lib/python3.11/site-packages/keras/src/engine/base_layer.py", line 3531, in load_own_variables
+    raise ValueError(
+ValueError: Layer 'conv1a' expected 1 variables, but received 0 variables during loading. Expected: ['conv1a/kernel:0']
+========================================================================
+2026-06-22 06:57:05  CRITICAL  Fatal unhandled exception
+Traceback (most recent call last):
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 696, in <module>
+    main()
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 679, in main
+    run_live(args.ticker, args.threshold, args.dry_run)
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 489, in run_live
+    m, nb = _load_model(w)
+            ^^^^^^^^^^^^^^
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 183, in _load_model
+    model.load_weights(str(wp))
+  File "/home/wpearce/claude_technical_analysis/.venv/lib/python3.11/site-packages/keras/src/utils/traceback_utils.py", line 70, in error_handler
+    raise e.with_traceback(filtered_tb) from None
+  File "/home/wpearce/claude_technical_analysis/.venv/lib/python3.11/site-packages/keras/src/engine/base_layer.py", line 3531, in load_own_variables
+    raise ValueError(
+ValueError: Layer 'conv1a' expected 1 variables, but received 0 variables during loading. Expected: ['conv1a/kernel:0']
+
+========================================================================
+CRASH @ 2026-06-22 02:57:05 ET
+Context: fatal — process exiting
+========================================================================
+Traceback (most recent call last):
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 696, in <module>
+    main()
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 679, in main
+    run_live(args.ticker, args.threshold, args.dry_run)
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 489, in run_live
+    m, nb = _load_model(w)
+            ^^^^^^^^^^^^^^
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 183, in _load_model
+    model.load_weights(str(wp))
+  File "/home/wpearce/claude_technical_analysis/.venv/lib/python3.11/site-packages/keras/src/utils/traceback_utils.py", line 70, in error_handler
+    raise e.with_traceback(filtered_tb) from None
+  File "/home/wpearce/claude_technical_analysis/.venv/lib/python3.11/site-packages/keras/src/engine/base_layer.py", line 3531, in load_own_variables
+    raise ValueError(
+ValueError: Layer 'conv1a' expected 1 variables, but received 0 variables during loading. Expected: ['conv1a/kernel:0']
+========================================================================
+
+========================================================================
+CRASH @ 2026-06-22 02:57:24 ET
+Context: startup failure
+========================================================================
+Traceback (most recent call last):
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 696, in <module>
+    main()
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 679, in main
+    run_live(args.ticker, args.threshold, args.dry_run)
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 489, in run_live
+    m, nb = _load_model(w)
+            ^^^^^^^^^^^^^^
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 183, in _load_model
+    model.load_weights(str(wp))
+  File "/home/wpearce/claude_technical_analysis/.venv/lib/python3.11/site-packages/keras/src/utils/traceback_utils.py", line 70, in error_handler
+    raise e.with_traceback(filtered_tb) from None
+  File "/home/wpearce/claude_technical_analysis/.venv/lib/python3.11/site-packages/keras/src/engine/base_layer.py", line 3531, in load_own_variables
+    raise ValueError(
+ValueError: Layer 'conv1a' expected 1 variables, but received 0 variables during loading. Expected: ['conv1a/kernel:0']
+========================================================================
+2026-06-22 06:57:24  CRITICAL  Fatal unhandled exception
+Traceback (most recent call last):
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 696, in <module>
+    main()
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 679, in main
+    run_live(args.ticker, args.threshold, args.dry_run)
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 489, in run_live
+    m, nb = _load_model(w)
+            ^^^^^^^^^^^^^^
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 183, in _load_model
+    model.load_weights(str(wp))
+  File "/home/wpearce/claude_technical_analysis/.venv/lib/python3.11/site-packages/keras/src/utils/traceback_utils.py", line 70, in error_handler
+    raise e.with_traceback(filtered_tb) from None
+  File "/home/wpearce/claude_technical_analysis/.venv/lib/python3.11/site-packages/keras/src/engine/base_layer.py", line 3531, in load_own_variables
+    raise ValueError(
+ValueError: Layer 'conv1a' expected 1 variables, but received 0 variables during loading. Expected: ['conv1a/kernel:0']
+
+========================================================================
+CRASH @ 2026-06-22 02:57:24 ET
+Context: fatal — process exiting
+========================================================================
+Traceback (most recent call last):
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 696, in <module>
+    main()
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 679, in main
+    run_live(args.ticker, args.threshold, args.dry_run)
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 489, in run_live
+    m, nb = _load_model(w)
+            ^^^^^^^^^^^^^^
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 183, in _load_model
+    model.load_weights(str(wp))
+  File "/home/wpearce/claude_technical_analysis/.venv/lib/python3.11/site-packages/keras/src/utils/traceback_utils.py", line 70, in error_handler
+    raise e.with_traceback(filtered_tb) from None
+  File "/home/wpearce/claude_technical_analysis/.venv/lib/python3.11/site-packages/keras/src/engine/base_layer.py", line 3531, in load_own_variables
+    raise ValueError(
+ValueError: Layer 'conv1a' expected 1 variables, but received 0 variables during loading. Expected: ['conv1a/kernel:0']
+========================================================================
+
+========================================================================
+CRASH @ 2026-06-22 02:57:43 ET
+Context: startup failure
+========================================================================
+Traceback (most recent call last):
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 696, in <module>
+    main()
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 679, in main
+    run_live(args.ticker, args.threshold, args.dry_run)
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 489, in run_live
+    m, nb = _load_model(w)
+            ^^^^^^^^^^^^^^
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 183, in _load_model
+    model.load_weights(str(wp))
+  File "/home/wpearce/claude_technical_analysis/.venv/lib/python3.11/site-packages/keras/src/utils/traceback_utils.py", line 70, in error_handler
+    raise e.with_traceback(filtered_tb) from None
+  File "/home/wpearce/claude_technical_analysis/.venv/lib/python3.11/site-packages/keras/src/engine/base_layer.py", line 3531, in load_own_variables
+    raise ValueError(
+ValueError: Layer 'conv1a' expected 1 variables, but received 0 variables during loading. Expected: ['conv1a/kernel:0']
+========================================================================
+2026-06-22 06:57:43  CRITICAL  Fatal unhandled exception
+Traceback (most recent call last):
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 696, in <module>
+    main()
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 679, in main
+    run_live(args.ticker, args.threshold, args.dry_run)
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 489, in run_live
+    m, nb = _load_model(w)
+            ^^^^^^^^^^^^^^
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 183, in _load_model
+    model.load_weights(str(wp))
+  File "/home/wpearce/claude_technical_analysis/.venv/lib/python3.11/site-packages/keras/src/utils/traceback_utils.py", line 70, in error_handler
+    raise e.with_traceback(filtered_tb) from None
+  File "/home/wpearce/claude_technical_analysis/.venv/lib/python3.11/site-packages/keras/src/engine/base_layer.py", line 3531, in load_own_variables
+    raise ValueError(
+ValueError: Layer 'conv1a' expected 1 variables, but received 0 variables during loading. Expected: ['conv1a/kernel:0']
+
+========================================================================
+CRASH @ 2026-06-22 02:57:43 ET
+Context: fatal — process exiting
+========================================================================
+Traceback (most recent call last):
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 696, in <module>
+    main()
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 679, in main
+    run_live(args.ticker, args.threshold, args.dry_run)
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 489, in run_live
+    m, nb = _load_model(w)
+            ^^^^^^^^^^^^^^
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 183, in _load_model
+    model.load_weights(str(wp))
+  File "/home/wpearce/claude_technical_analysis/.venv/lib/python3.11/site-packages/keras/src/utils/traceback_utils.py", line 70, in error_handler
+    raise e.with_traceback(filtered_tb) from None
+  File "/home/wpearce/claude_technical_analysis/.venv/lib/python3.11/site-packages/keras/src/engine/base_layer.py", line 3531, in load_own_variables
+    raise ValueError(
+ValueError: Layer 'conv1a' expected 1 variables, but received 0 variables during loading. Expected: ['conv1a/kernel:0']
+========================================================================
+
+========================================================================
+CRASH @ 2026-06-22 02:58:02 ET
+Context: startup failure
+========================================================================
+Traceback (most recent call last):
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 696, in <module>
+    main()
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 679, in main
+    run_live(args.ticker, args.threshold, args.dry_run)
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 489, in run_live
+    m, nb = _load_model(w)
+            ^^^^^^^^^^^^^^
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 183, in _load_model
+    model.load_weights(str(wp))
+  File "/home/wpearce/claude_technical_analysis/.venv/lib/python3.11/site-packages/keras/src/utils/traceback_utils.py", line 70, in error_handler
+    raise e.with_traceback(filtered_tb) from None
+  File "/home/wpearce/claude_technical_analysis/.venv/lib/python3.11/site-packages/keras/src/engine/base_layer.py", line 3531, in load_own_variables
+    raise ValueError(
+ValueError: Layer 'conv1a' expected 1 variables, but received 0 variables during loading. Expected: ['conv1a/kernel:0']
+========================================================================
+2026-06-22 06:58:02  CRITICAL  Fatal unhandled exception
+Traceback (most recent call last):
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 696, in <module>
+    main()
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 679, in main
+    run_live(args.ticker, args.threshold, args.dry_run)
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 489, in run_live
+    m, nb = _load_model(w)
+            ^^^^^^^^^^^^^^
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 183, in _load_model
+    model.load_weights(str(wp))
+  File "/home/wpearce/claude_technical_analysis/.venv/lib/python3.11/site-packages/keras/src/utils/traceback_utils.py", line 70, in error_handler
+    raise e.with_traceback(filtered_tb) from None
+  File "/home/wpearce/claude_technical_analysis/.venv/lib/python3.11/site-packages/keras/src/engine/base_layer.py", line 3531, in load_own_variables
+    raise ValueError(
+ValueError: Layer 'conv1a' expected 1 variables, but received 0 variables during loading. Expected: ['conv1a/kernel:0']
+
+========================================================================
+CRASH @ 2026-06-22 02:58:02 ET
+Context: fatal — process exiting
+========================================================================
+Traceback (most recent call last):
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 696, in <module>
+    main()
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 679, in main
+    run_live(args.ticker, args.threshold, args.dry_run)
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 489, in run_live
+    m, nb = _load_model(w)
+            ^^^^^^^^^^^^^^
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 183, in _load_model
+    model.load_weights(str(wp))
+  File "/home/wpearce/claude_technical_analysis/.venv/lib/python3.11/site-packages/keras/src/utils/traceback_utils.py", line 70, in error_handler
+    raise e.with_traceback(filtered_tb) from None
+  File "/home/wpearce/claude_technical_analysis/.venv/lib/python3.11/site-packages/keras/src/engine/base_layer.py", line 3531, in load_own_variables
+    raise ValueError(
+ValueError: Layer 'conv1a' expected 1 variables, but received 0 variables during loading. Expected: ['conv1a/kernel:0']
+========================================================================
+
+========================================================================
+CRASH @ 2026-06-22 02:58:22 ET
+Context: startup failure
+========================================================================
+Traceback (most recent call last):
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 696, in <module>
+    main()
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 679, in main
+    run_live(args.ticker, args.threshold, args.dry_run)
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 489, in run_live
+    m, nb = _load_model(w)
+            ^^^^^^^^^^^^^^
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 183, in _load_model
+    model.load_weights(str(wp))
+  File "/home/wpearce/claude_technical_analysis/.venv/lib/python3.11/site-packages/keras/src/utils/traceback_utils.py", line 70, in error_handler
+    raise e.with_traceback(filtered_tb) from None
+  File "/home/wpearce/claude_technical_analysis/.venv/lib/python3.11/site-packages/keras/src/engine/base_layer.py", line 3531, in load_own_variables
+    raise ValueError(
+ValueError: Layer 'conv1a' expected 1 variables, but received 0 variables during loading. Expected: ['conv1a/kernel:0']
+========================================================================
+2026-06-22 06:58:22  CRITICAL  Fatal unhandled exception
+Traceback (most recent call last):
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 696, in <module>
+    main()
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 679, in main
+    run_live(args.ticker, args.threshold, args.dry_run)
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 489, in run_live
+    m, nb = _load_model(w)
+            ^^^^^^^^^^^^^^
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 183, in _load_model
+    model.load_weights(str(wp))
+  File "/home/wpearce/claude_technical_analysis/.venv/lib/python3.11/site-packages/keras/src/utils/traceback_utils.py", line 70, in error_handler
+    raise e.with_traceback(filtered_tb) from None
+  File "/home/wpearce/claude_technical_analysis/.venv/lib/python3.11/site-packages/keras/src/engine/base_layer.py", line 3531, in load_own_variables
+    raise ValueError(
+ValueError: Layer 'conv1a' expected 1 variables, but received 0 variables during loading. Expected: ['conv1a/kernel:0']
+
+========================================================================
+CRASH @ 2026-06-22 02:58:22 ET
+Context: fatal — process exiting
+========================================================================
+Traceback (most recent call last):
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 696, in <module>
+    main()
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 679, in main
+    run_live(args.ticker, args.threshold, args.dry_run)
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 489, in run_live
+    m, nb = _load_model(w)
+            ^^^^^^^^^^^^^^
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 183, in _load_model
+    model.load_weights(str(wp))
+  File "/home/wpearce/claude_technical_analysis/.venv/lib/python3.11/site-packages/keras/src/utils/traceback_utils.py", line 70, in error_handler
+    raise e.with_traceback(filtered_tb) from None
+  File "/home/wpearce/claude_technical_analysis/.venv/lib/python3.11/site-packages/keras/src/engine/base_layer.py", line 3531, in load_own_variables
+    raise ValueError(
+ValueError: Layer 'conv1a' expected 1 variables, but received 0 variables during loading. Expected: ['conv1a/kernel:0']
+========================================================================
+
+========================================================================
+CRASH @ 2026-06-22 02:58:52 ET
+Context: startup failure
+========================================================================
+Traceback (most recent call last):
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 696, in <module>
+    main()
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 679, in main
+    run_live(args.ticker, args.threshold, args.dry_run)
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 489, in run_live
+    m, nb = _load_model(w)
+            ^^^^^^^^^^^^^^
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 183, in _load_model
+    model.load_weights(str(wp))
+  File "/home/wpearce/claude_technical_analysis/.venv/lib/python3.11/site-packages/keras/src/utils/traceback_utils.py", line 70, in error_handler
+    raise e.with_traceback(filtered_tb) from None
+  File "/home/wpearce/claude_technical_analysis/.venv/lib/python3.11/site-packages/keras/src/engine/base_layer.py", line 3531, in load_own_variables
+    raise ValueError(
+ValueError: Layer 'conv1a' expected 1 variables, but received 0 variables during loading. Expected: ['conv1a/kernel:0']
+========================================================================
+2026-06-22 06:58:52  CRITICAL  Fatal unhandled exception
+Traceback (most recent call last):
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 696, in <module>
+    main()
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 679, in main
+    run_live(args.ticker, args.threshold, args.dry_run)
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 489, in run_live
+    m, nb = _load_model(w)
+            ^^^^^^^^^^^^^^
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 183, in _load_model
+    model.load_weights(str(wp))
+  File "/home/wpearce/claude_technical_analysis/.venv/lib/python3.11/site-packages/keras/src/utils/traceback_utils.py", line 70, in error_handler
+    raise e.with_traceback(filtered_tb) from None
+  File "/home/wpearce/claude_technical_analysis/.venv/lib/python3.11/site-packages/keras/src/engine/base_layer.py", line 3531, in load_own_variables
+    raise ValueError(
+ValueError: Layer 'conv1a' expected 1 variables, but received 0 variables during loading. Expected: ['conv1a/kernel:0']
+
+========================================================================
+CRASH @ 2026-06-22 02:58:52 ET
+Context: fatal — process exiting
+========================================================================
+Traceback (most recent call last):
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 696, in <module>
+    main()
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 679, in main
+    run_live(args.ticker, args.threshold, args.dry_run)
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 489, in run_live
+    m, nb = _load_model(w)
+            ^^^^^^^^^^^^^^
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 183, in _load_model
+    model.load_weights(str(wp))
+  File "/home/wpearce/claude_technical_analysis/.venv/lib/python3.11/site-packages/keras/src/utils/traceback_utils.py", line 70, in error_handler
+    raise e.with_traceback(filtered_tb) from None
+  File "/home/wpearce/claude_technical_analysis/.venv/lib/python3.11/site-packages/keras/src/engine/base_layer.py", line 3531, in load_own_variables
+    raise ValueError(
+ValueError: Layer 'conv1a' expected 1 variables, but received 0 variables during loading. Expected: ['conv1a/kernel:0']
+========================================================================
+
+========================================================================
+CRASH @ 2026-06-22 02:59:12 ET
+Context: startup failure
+========================================================================
+Traceback (most recent call last):
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 696, in <module>
+    main()
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 679, in main
+    run_live(args.ticker, args.threshold, args.dry_run)
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 489, in run_live
+    m, nb = _load_model(w)
+            ^^^^^^^^^^^^^^
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 183, in _load_model
+    model.load_weights(str(wp))
+  File "/home/wpearce/claude_technical_analysis/.venv/lib/python3.11/site-packages/keras/src/utils/traceback_utils.py", line 70, in error_handler
+    raise e.with_traceback(filtered_tb) from None
+  File "/home/wpearce/claude_technical_analysis/.venv/lib/python3.11/site-packages/keras/src/engine/base_layer.py", line 3531, in load_own_variables
+    raise ValueError(
+ValueError: Layer 'conv1a' expected 1 variables, but received 0 variables during loading. Expected: ['conv1a/kernel:0']
+========================================================================
+2026-06-22 06:59:12  CRITICAL  Fatal unhandled exception
+Traceback (most recent call last):
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 696, in <module>
+    main()
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 679, in main
+    run_live(args.ticker, args.threshold, args.dry_run)
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 489, in run_live
+    m, nb = _load_model(w)
+            ^^^^^^^^^^^^^^
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 183, in _load_model
+    model.load_weights(str(wp))
+  File "/home/wpearce/claude_technical_analysis/.venv/lib/python3.11/site-packages/keras/src/utils/traceback_utils.py", line 70, in error_handler
+    raise e.with_traceback(filtered_tb) from None
+  File "/home/wpearce/claude_technical_analysis/.venv/lib/python3.11/site-packages/keras/src/engine/base_layer.py", line 3531, in load_own_variables
+    raise ValueError(
+ValueError: Layer 'conv1a' expected 1 variables, but received 0 variables during loading. Expected: ['conv1a/kernel:0']
+
+========================================================================
+CRASH @ 2026-06-22 02:59:12 ET
+Context: fatal — process exiting
+========================================================================
+Traceback (most recent call last):
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 696, in <module>
+    main()
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 679, in main
+    run_live(args.ticker, args.threshold, args.dry_run)
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 489, in run_live
+    m, nb = _load_model(w)
+            ^^^^^^^^^^^^^^
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 183, in _load_model
+    model.load_weights(str(wp))
+  File "/home/wpearce/claude_technical_analysis/.venv/lib/python3.11/site-packages/keras/src/utils/traceback_utils.py", line 70, in error_handler
+    raise e.with_traceback(filtered_tb) from None
+  File "/home/wpearce/claude_technical_analysis/.venv/lib/python3.11/site-packages/keras/src/engine/base_layer.py", line 3531, in load_own_variables
+    raise ValueError(
+ValueError: Layer 'conv1a' expected 1 variables, but received 0 variables during loading. Expected: ['conv1a/kernel:0']
+========================================================================
+
+========================================================================
+CRASH @ 2026-06-22 02:59:31 ET
+Context: startup failure
+========================================================================
+Traceback (most recent call last):
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 696, in <module>
+    main()
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 679, in main
+    run_live(args.ticker, args.threshold, args.dry_run)
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 489, in run_live
+    m, nb = _load_model(w)
+            ^^^^^^^^^^^^^^
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 183, in _load_model
+    model.load_weights(str(wp))
+  File "/home/wpearce/claude_technical_analysis/.venv/lib/python3.11/site-packages/keras/src/utils/traceback_utils.py", line 70, in error_handler
+    raise e.with_traceback(filtered_tb) from None
+  File "/home/wpearce/claude_technical_analysis/.venv/lib/python3.11/site-packages/keras/src/engine/base_layer.py", line 3531, in load_own_variables
+    raise ValueError(
+ValueError: Layer 'conv1a' expected 1 variables, but received 0 variables during loading. Expected: ['conv1a/kernel:0']
+========================================================================
+2026-06-22 06:59:31  CRITICAL  Fatal unhandled exception
+Traceback (most recent call last):
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 696, in <module>
+    main()
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 679, in main
+    run_live(args.ticker, args.threshold, args.dry_run)
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 489, in run_live
+    m, nb = _load_model(w)
+            ^^^^^^^^^^^^^^
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 183, in _load_model
+    model.load_weights(str(wp))
+  File "/home/wpearce/claude_technical_analysis/.venv/lib/python3.11/site-packages/keras/src/utils/traceback_utils.py", line 70, in error_handler
+    raise e.with_traceback(filtered_tb) from None
+  File "/home/wpearce/claude_technical_analysis/.venv/lib/python3.11/site-packages/keras/src/engine/base_layer.py", line 3531, in load_own_variables
+    raise ValueError(
+ValueError: Layer 'conv1a' expected 1 variables, but received 0 variables during loading. Expected: ['conv1a/kernel:0']
+
+========================================================================
+CRASH @ 2026-06-22 02:59:31 ET
+Context: fatal — process exiting
+========================================================================
+Traceback (most recent call last):
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 696, in <module>
+    main()
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 679, in main
+    run_live(args.ticker, args.threshold, args.dry_run)
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 489, in run_live
+    m, nb = _load_model(w)
+            ^^^^^^^^^^^^^^
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 183, in _load_model
+    model.load_weights(str(wp))
+  File "/home/wpearce/claude_technical_analysis/.venv/lib/python3.11/site-packages/keras/src/utils/traceback_utils.py", line 70, in error_handler
+    raise e.with_traceback(filtered_tb) from None
+  File "/home/wpearce/claude_technical_analysis/.venv/lib/python3.11/site-packages/keras/src/engine/base_layer.py", line 3531, in load_own_variables
+    raise ValueError(
+ValueError: Layer 'conv1a' expected 1 variables, but received 0 variables during loading. Expected: ['conv1a/kernel:0']
+========================================================================
+
+========================================================================
+CRASH @ 2026-06-22 02:59:50 ET
+Context: startup failure
+========================================================================
+Traceback (most recent call last):
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 696, in <module>
+    main()
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 679, in main
+    run_live(args.ticker, args.threshold, args.dry_run)
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 489, in run_live
+    m, nb = _load_model(w)
+            ^^^^^^^^^^^^^^
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 183, in _load_model
+    model.load_weights(str(wp))
+  File "/home/wpearce/claude_technical_analysis/.venv/lib/python3.11/site-packages/keras/src/utils/traceback_utils.py", line 70, in error_handler
+    raise e.with_traceback(filtered_tb) from None
+  File "/home/wpearce/claude_technical_analysis/.venv/lib/python3.11/site-packages/keras/src/engine/base_layer.py", line 3531, in load_own_variables
+    raise ValueError(
+ValueError: Layer 'conv1a' expected 1 variables, but received 0 variables during loading. Expected: ['conv1a/kernel:0']
+========================================================================
+2026-06-22 06:59:50  CRITICAL  Fatal unhandled exception
+Traceback (most recent call last):
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 696, in <module>
+    main()
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 679, in main
+    run_live(args.ticker, args.threshold, args.dry_run)
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 489, in run_live
+    m, nb = _load_model(w)
+            ^^^^^^^^^^^^^^
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 183, in _load_model
+    model.load_weights(str(wp))
+  File "/home/wpearce/claude_technical_analysis/.venv/lib/python3.11/site-packages/keras/src/utils/traceback_utils.py", line 70, in error_handler
+    raise e.with_traceback(filtered_tb) from None
+  File "/home/wpearce/claude_technical_analysis/.venv/lib/python3.11/site-packages/keras/src/engine/base_layer.py", line 3531, in load_own_variables
+    raise ValueError(
+ValueError: Layer 'conv1a' expected 1 variables, but received 0 variables during loading. Expected: ['conv1a/kernel:0']
+
+========================================================================
+CRASH @ 2026-06-22 02:59:50 ET
+Context: fatal — process exiting
+========================================================================
+Traceback (most recent call last):
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 696, in <module>
+    main()
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 679, in main
+    run_live(args.ticker, args.threshold, args.dry_run)
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 489, in run_live
+    m, nb = _load_model(w)
+            ^^^^^^^^^^^^^^
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 183, in _load_model
+    model.load_weights(str(wp))
+  File "/home/wpearce/claude_technical_analysis/.venv/lib/python3.11/site-packages/keras/src/utils/traceback_utils.py", line 70, in error_handler
+    raise e.with_traceback(filtered_tb) from None
+  File "/home/wpearce/claude_technical_analysis/.venv/lib/python3.11/site-packages/keras/src/engine/base_layer.py", line 3531, in load_own_variables
+    raise ValueError(
+ValueError: Layer 'conv1a' expected 1 variables, but received 0 variables during loading. Expected: ['conv1a/kernel:0']
+========================================================================
+
+========================================================================
+CRASH @ 2026-06-22 03:00:09 ET
+Context: startup failure
+========================================================================
+Traceback (most recent call last):
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 696, in <module>
+    main()
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 679, in main
+    run_live(args.ticker, args.threshold, args.dry_run)
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 489, in run_live
+    m, nb = _load_model(w)
+            ^^^^^^^^^^^^^^
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 183, in _load_model
+    model.load_weights(str(wp))
+  File "/home/wpearce/claude_technical_analysis/.venv/lib/python3.11/site-packages/keras/src/utils/traceback_utils.py", line 70, in error_handler
+    raise e.with_traceback(filtered_tb) from None
+  File "/home/wpearce/claude_technical_analysis/.venv/lib/python3.11/site-packages/keras/src/engine/base_layer.py", line 3531, in load_own_variables
+    raise ValueError(
+ValueError: Layer 'conv1a' expected 1 variables, but received 0 variables during loading. Expected: ['conv1a/kernel:0']
+========================================================================
+2026-06-22 07:00:09  CRITICAL  Fatal unhandled exception
+Traceback (most recent call last):
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 696, in <module>
+    main()
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 679, in main
+    run_live(args.ticker, args.threshold, args.dry_run)
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 489, in run_live
+    m, nb = _load_model(w)
+            ^^^^^^^^^^^^^^
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 183, in _load_model
+    model.load_weights(str(wp))
+  File "/home/wpearce/claude_technical_analysis/.venv/lib/python3.11/site-packages/keras/src/utils/traceback_utils.py", line 70, in error_handler
+    raise e.with_traceback(filtered_tb) from None
+  File "/home/wpearce/claude_technical_analysis/.venv/lib/python3.11/site-packages/keras/src/engine/base_layer.py", line 3531, in load_own_variables
+    raise ValueError(
+ValueError: Layer 'conv1a' expected 1 variables, but received 0 variables during loading. Expected: ['conv1a/kernel:0']
+
+========================================================================
+CRASH @ 2026-06-22 03:00:09 ET
+Context: fatal — process exiting
+========================================================================
+Traceback (most recent call last):
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 696, in <module>
+    main()
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 679, in main
+    run_live(args.ticker, args.threshold, args.dry_run)
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 489, in run_live
+    m, nb = _load_model(w)
+            ^^^^^^^^^^^^^^
+  File "/home/wpearce/claude_technical_analysis/source_code/live_monitor.py", line 183, in _load_model
+    model.load_weights(str(wp))
+  File "/home/wpearce/claude_technical_analysis/.venv/lib/python3.11/site-packages/keras/src/utils/traceback_utils.py", line 70, in error_handler
+    raise e.with_traceback(filtered_tb) from None
+  File "/home/wpearce/claude_technical_analysis/.venv/lib/python3.11/site-packages/keras/src/engine/base_layer.py", line 3531, in load_own_variables
+    raise ValueError(
+ValueError: Layer 'conv1a' expected 1 variables, but received 0 variables during loading. Expected: ['conv1a/kernel:0']
+========================================================================
