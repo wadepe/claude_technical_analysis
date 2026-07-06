@@ -76,28 +76,29 @@ if [ ! -x "$VENV_DIR/bin/pip" ]; then
     exit 1
 fi
 
-# ── Verify the interpreter version matches the pinned TensorFlow ──────────────
-# tensorflow is pinned to 2.15.0 below (see why in the install block), and TF
-# 2.15 only ships wheels for Python 3.9–3.11. A venv outside that range fails
-# deep in pip with a cryptic "Could not find a version that satisfies the
-# requirement tensorflow"; catch it here with actionable guidance instead.
-# If the TF pin changes, update this range to match its supported Pythons.
+# ── Verify the interpreter version is in TensorFlow's supported range ─────────
+# TF only ships wheels for specific Python versions and lags new releases, so a
+# too-new interpreter (e.g. a fresh Ubuntu's default python3) — or one too old —
+# fails deep in pip with a cryptic "Could not find a version that satisfies the
+# requirement tensorflow". Catch it here with actionable guidance instead.
+# Bump PY_MAX_MINOR once TF publishes wheels for a newer Python.
 PY_MIN_MINOR=9
-PY_MAX_MINOR=11
+PY_MAX_MINOR=12
 PY_MINOR=$("$VENV_DIR/bin/python" -c 'import sys; print(sys.version_info[1])')
 PY_VER=$("$VENV_DIR/bin/python" -c 'import sys; print("%d.%d" % sys.version_info[:2])')
 if [ "$PY_MINOR" -lt "$PY_MIN_MINOR" ] || [ "$PY_MAX_MINOR" -lt "$PY_MINOR" ]; then
-    echo "ERROR: venv Python is $PY_VER, but the pinned TensorFlow (2.15.0) only"
-    echo "has wheels for 3.$PY_MIN_MINOR through 3.$PY_MAX_MINOR. Rebuild the venv"
-    echo "against a supported interpreter via the PYTHON override, e.g.:"
+    echo "ERROR: venv Python is $PY_VER, but TensorFlow only publishes wheels for"
+    echo "3.$PY_MIN_MINOR through 3.$PY_MAX_MINOR. Rebuild the venv against a supported"
+    echo "interpreter via the PYTHON override, e.g.:"
     echo "  rm -rf \"$VENV_DIR\""
-    echo "  PYTHON=\"\$(uv python find 3.11)\" ./deploy/setup_server.sh"
+    echo "  PYTHON=python3.12 ./deploy/setup_server.sh"
+    echo "(If TF now supports 3.$PY_MINOR, raise PY_MAX_MINOR near the top of this block.)"
     exit 1
 fi
 
 "$VENV_DIR/bin/pip" install --upgrade pip --quiet
 "$VENV_DIR/bin/pip" install \
-    "tensorflow==2.15.0" \
+    tensorflow \
     yfinance \
     pandas \
     numpy \
@@ -106,11 +107,6 @@ fi
     matplotlib \
     pandas_market_calendars \
     --quiet
-# tensorflow pinned to 2.15.0 to match the training environment: the saved
-# cnn_best.weights.h5 files were written with Keras 2 (TF <= 2.15). TF 2.16+
-# bundles Keras 3, whose weights format differs, so model.load_weights() fails
-# on those files. Keep server inference on the same major Keras it trained with.
-# (TF 2.15 also constrains numpy < 2 automatically — no separate numpy pin needed.)
 # pandas_market_calendars: NYSE holiday / half-day calendar for live_monitor.py.
 
 echo "  Python dependencies installed."
