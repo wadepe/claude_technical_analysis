@@ -10,7 +10,9 @@
 
 set -euo pipefail
 
-REPO_DIR="/home/ubuntu/claude_technical_analysis"
+# Derive the repo root from this script's own location (deploy/..) so the
+# path is correct regardless of which user/home the repo is cloned under.
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 LOG_TAG="push_results"
 BRANCH="master"
 
@@ -42,7 +44,8 @@ fi
 # ── Stage only the data output files ─────────────────────────────────────────
 # We intentionally do NOT do 'git add -A' — only the result files go to
 # GitHub from the server.  Code changes flow the other direction (dev → server).
-DATA_FILES=("spy_data_1min.csv" "rising_wedge.csv" "rising_wedge_chart.png" "crash.log")
+DATA_FILES=("spy_data_1min.csv" "rising_wedge.csv" "rising_wedge_chart.png" "crash.log"
+            "logs/push_results.log" "logs/pull_updates.log")
 STAGED=0
 for f in "${DATA_FILES[@]}"; do
     if [ -f "$REPO_DIR/$f" ]; then

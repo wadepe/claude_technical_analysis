@@ -35,7 +35,9 @@ PYTHON="${PYTHON:-python3}"
 DEPLOY_DIR="$REPO_DIR/deploy"
 SRC_DIR="$REPO_DIR/source_code"
 VENV_DIR="$REPO_DIR/.venv"
-LOG_DIR="$HOME/logs"
+# Cron logs live inside the repo so push_results.sh can ship them to GitHub,
+# where they can be inspected remotely (the server has no copy/paste).
+LOG_DIR="$REPO_DIR/logs"
 
 echo "============================================================"
 echo "  Rising Wedge Monitor — Server Setup"

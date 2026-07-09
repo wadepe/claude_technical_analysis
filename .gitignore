@@ -48,6 +48,9 @@ corpus_generation*.log
 add_btc_negatives.log
 # crash.log is the exception — it is tracked so server crashes are visible on GitHub
 !crash.log
+# cron logs are pushed nightly by push_results.sh for remote debugging
+!logs/push_results.log
+!logs/pull_updates.log
 
 # Claude internal config
 .claude/

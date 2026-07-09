@@ -14,7 +14,9 @@
 
 set -euo pipefail
 
-REPO_DIR="/home/ubuntu/claude_technical_analysis"
+# Derive the repo root from this script's own location (deploy/..) so the
+# path is correct regardless of which user/home the repo is cloned under.
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SERVICE="live-monitor"
 BRANCH="master"
 LOG_TAG="pull_updates"
