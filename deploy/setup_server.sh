@@ -195,6 +195,22 @@ echo ""
 # ── 5. Install crontab entries ────────────────────────────────────────────────
 echo "[5/5] Installing crontab entries ..."
 
+# Ubuntu's stock cron (vixie/ISC) does NOT honour CRON_TZ — it schedules in
+# system time and silently ignores the variable. The cron hours below are
+# meant as US/Eastern (7 PM push after the close, 3 AM pull before pre-market),
+# so the system timezone must be America/New_York for them to fire on time.
+SYS_TZ=$(timedatectl show -p Timezone --value 2>/dev/null || cat /etc/timezone 2>/dev/null || echo "unknown")
+if [ "$SYS_TZ" != "America/New_York" ]; then
+    echo ""
+    echo "  *** WARNING: system timezone is '$SYS_TZ', not America/New_York. ***"
+    echo "  The cron jobs below will fire at the wrong wall-clock time (e.g. the"
+    echo "  7 PM ET data push would run mid-session). Fix with:"
+    echo "    sudo timedatectl set-timezone America/New_York"
+    echo "  then re-run this script (or leave the crontab as-is; entries are"
+    echo "  interpreted in the new timezone automatically once it is set)."
+    echo ""
+fi
+
 # Build the new crontab block (idempotent — removes old block first)
 CRON_MARKER="# rising-wedge-monitor"
 CRON_BLOCK="$CRON_MARKER
