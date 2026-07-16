@@ -55,9 +55,12 @@ from cnn_model import build_model, FEATURE_COLS, N_BARS, N_FEATURES
 # Constants
 # =============================================================================
 
-TRAIN_END  = 360_000   # entries 0       - 359,999  used for Keras .fit()
-VAL_END    = 400_000   # entries 360,000 - 399,999  used for Keras validation
-# entries 400,000 - 499,999  are the held-out eval set (evaluate_cnn.py)
+# Split fractions of the shuffled manifest (same proportions as the original
+# 360K/40K/100K split of the 500K v1 corpus, but valid for any corpus size —
+# the v2 corpus is 700K entries).
+TRAIN_FRAC = 0.72   # first 72%           -> Keras .fit()
+VAL_FRAC   = 0.08   # next 8%             -> Keras validation
+# remaining 20%  -> held-out eval set (evaluate_cnn.py)
 
 
 # =============================================================================
@@ -233,15 +236,16 @@ def main() -> None:
     manifest.sort(key=lambda e: e['shuffled_idx'])
     print(f'  Total entries in manifest: {len(manifest):,}')
 
-    if len(manifest) < VAL_END:
+    if len(manifest) < 10_000:
         raise ValueError(
-            f'Manifest has only {len(manifest):,} entries; '
-            f'need at least {VAL_END:,} for training. '
-            f'Re-run corpus generation.'
+            f'Manifest has only {len(manifest):,} entries — too small to '
+            f'train on. Re-run corpus generation.'
         )
 
-    train_entries = manifest[:TRAIN_END]
-    val_entries   = manifest[TRAIN_END:VAL_END]
+    train_end = int(len(manifest) * TRAIN_FRAC)
+    val_end   = int(len(manifest) * (TRAIN_FRAC + VAL_FRAC))
+    train_entries = manifest[:train_end]
+    val_entries   = manifest[train_end:val_end]
 
     n_wedge_train = sum(1 for e in train_entries if e['label'] == 1)
     n_wedge_val   = sum(1 for e in val_entries   if e['label'] == 1)
@@ -249,8 +253,8 @@ def main() -> None:
           f'(wedge={n_wedge_train:,}, noise={len(train_entries)-n_wedge_train:,})')
     print(f'  Keras val   : {len(val_entries):,}  '
           f'(wedge={n_wedge_val:,},   noise={len(val_entries)-n_wedge_val:,})')
-    print(f'  Held-out    : {len(manifest) - VAL_END:,}  '
-          f'(evaluate_cnn.py)\n')
+    print(f'  Held-out    : {len(manifest) - val_end:,}  '
+          f'(evaluate_cnn.py, --eval-start {val_end})\n')
 
     # ── Load data (from cache or parquet) ─────────────────────────────────────
     force = args.no_cache
