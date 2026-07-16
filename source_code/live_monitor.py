@@ -11,6 +11,9 @@ Behaviour
 ---------
   - Polls the ticker once per minute while the market is open
     (pre-market 4:00 AM ET through after-hours close 8:00 PM ET, weekdays)
+  - Rejects phantom prints: bars whose OHLC deviates more than
+    --spike-threshold percent (default 4%) from the recent median close
+    are skipped entirely (not written, not scored)
   - Appends each completed bar to  spy_data_1min.csv
   - Maintains rolling windows of 50 and 250 bars (filled from CSV on restart)
   - Normalises each window and scores it with the matching CNN model
@@ -213,6 +216,70 @@ def _normalise(window: np.ndarray) -> np.ndarray:
     vol_n = (vol / vol_max).reshape(-1, 1)
 
     return np.concatenate([prices_n, vol_n], axis=1).astype(np.float32)
+
+
+# =============================================================================
+# Bad-tick / spike filter
+# =============================================================================
+
+class SpikeFilter:
+    """
+    Rejects bars containing phantom prints (e.g. the 2026-07-07 17:07 bar where
+    SPY briefly 'traded' at 696.82, ~7% below the market). A bad bar poisons
+    the rolling windows for the next 50/250 bars by stretching the
+    normalisation range, muting the model's inputs.
+
+    A bar is rejected when any OHLC field deviates more than `threshold`
+    (fraction, e.g. 0.04 = 4%) from the median close of the last `window`
+    accepted bars. To avoid rejecting a genuine large move forever, after
+    `max_consecutive` rejections in a row the next bar is accepted and the
+    reference re-anchors to it.
+    """
+
+    def __init__(self, threshold: float = 0.04, window: int = 10,
+                 max_consecutive: int = 3):
+        self.threshold       = threshold
+        self.max_consecutive = max_consecutive
+        self._closes         = deque(maxlen=window)
+        self._rejects_in_row = 0
+
+    def seed(self, closes) -> None:
+        """Pre-fill the reference from historical closes (CSV tail on restart)."""
+        for c in closes:
+            self._closes.append(float(c))
+
+    def check(self, bar: dict) -> bool:
+        """Return True to accept the bar; False (and log) to reject it."""
+        if not self._closes:
+            self._closes.append(float(bar['close']))
+            return True
+
+        ref   = float(np.median(self._closes))
+        worst = max(abs(float(bar[f]) / ref - 1.0)
+                    for f in ('open', 'high', 'low', 'close'))
+
+        if worst > self.threshold:
+            self._rejects_in_row += 1
+            if self._rejects_in_row <= self.max_consecutive:
+                log.warning(
+                    f'SPIKE FILTER: rejected bar {bar.get("timestamp", "?")} '
+                    f'(deviates {worst*100:.2f}% from median {ref:.2f}, '
+                    f'threshold {self.threshold*100:.1f}%, '
+                    f'{self._rejects_in_row}/{self.max_consecutive} in a row)'
+                )
+                return False
+            log.warning(
+                f'SPIKE FILTER: accepting bar {bar.get("timestamp", "?")} after '
+                f'{self._rejects_in_row - 1} consecutive rejections — treating '
+                f'the move as genuine and re-anchoring.'
+            )
+            # Full re-anchor: drop the stale reference entirely, otherwise the
+            # old median keeps rejecting bars at the new price level.
+            self._closes.clear()
+
+        self._rejects_in_row = 0
+        self._closes.append(float(bar['close']))
+        return True
 
 
 # =============================================================================
@@ -478,7 +545,8 @@ def _score_window(model, window_deque: deque, n_bars: int) -> Optional[float]:
 # Main loop
 # =============================================================================
 
-def run_live(ticker: str, threshold: float, dry_run: bool) -> None:
+def run_live(ticker: str, threshold: float, dry_run: bool,
+             spike_threshold: float = 0.04) -> None:
     """Main monitoring loop — runs until keyboard interrupt."""
 
     # Load models
@@ -501,6 +569,13 @@ def run_live(ticker: str, threshold: float, dry_run: bool) -> None:
     # Pre-fill rolling windows from existing data
     log.info('Pre-filling rolling windows from existing CSV data ...')
     windows = {w: _load_rolling_window(nb) for w, nb in n_bars_map.items()}
+
+    # Seed the spike filter's reference from the freshest pre-filled window
+    # (row layout is [open, high, low, close, volume] — close is index 3)
+    spike_filter = SpikeFilter(threshold=spike_threshold)
+    largest = max(windows.values(), key=len, default=None)
+    if largest:
+        spike_filter.seed(row[3] for row in list(largest)[-10:])
 
     last_ts = _last_timestamp()
     log.info(f'Last CSV timestamp: {last_ts or "none (fresh start)"}')
@@ -541,6 +616,12 @@ def run_live(ticker: str, threshold: float, dry_run: bool) -> None:
                 log.debug(f'Duplicate bar {bar["timestamp"]} — skipping')
                 continue
             last_ts = bar['timestamp']
+
+            # Reject phantom prints before they reach the CSV or the windows.
+            # A skipped bar behaves exactly like a minute where yfinance
+            # returned nothing.
+            if not spike_filter.check(bar):
+                continue
 
             # ── Append to price CSV ───────────────────────────────────────────
             _append_spy_row(bar, dry_run)
@@ -596,11 +677,14 @@ def run_live(ticker: str, threshold: float, dry_run: bool) -> None:
 # Replay mode  (feed spy_data_1min.csv through the models without live polling)
 # =============================================================================
 
-def run_replay(ticker: str, threshold: float, dry_run: bool) -> None:
+def run_replay(ticker: str, threshold: float, dry_run: bool,
+               spike_threshold: float = 0.04) -> None:
     """
     Replay spy_data_1min.csv through both models as fast as possible.
     Useful for testing scoring logic without waiting for live data.
     Writes results to rising_wedge.csv (overwriting it for a clean replay).
+    Applies the same spike filter as live mode, so bad ticks already stored
+    in the CSV (e.g. 2026-07-07 17:07) are skipped during re-scoring.
     """
     if not SPY_CSV.exists():
         raise SystemExit(f'{SPY_CSV} not found. Nothing to replay.')
@@ -632,8 +716,13 @@ def run_replay(ticker: str, threshold: float, dry_run: bool) -> None:
 
     windows = {w: deque(maxlen=nb) for w, nb in n_bars_map.items()}
     signals = 0
+    spike_filter = SpikeFilter(threshold=spike_threshold)
+    skipped = 0
 
     for _, row in df.iterrows():
+        if not spike_filter.check(row):
+            skipped += 1
+            continue
         bar_arr = row[FEATURE_COLS].values.astype(np.float32)
         for dq in windows.values():
             dq.append(bar_arr)
@@ -652,7 +741,8 @@ def run_replay(ticker: str, threshold: float, dry_run: bool) -> None:
 
         _append_wedge_row(row['timestamp'], scores, threshold, depths, dry_run)
 
-    log.info(f'Replay complete. {signals} signal bars written to {WEDGE_CSV}')
+    log.info(f'Replay complete. {signals} signal bars written to {WEDGE_CSV}  '
+             f'({skipped} bar(s) rejected by spike filter)')
 
 
 # =============================================================================
@@ -671,12 +761,18 @@ def main() -> None:
                         help='Replay spy_data_1min.csv instead of live polling')
     parser.add_argument('--dry-run',   action='store_true',
                         help='Print output without writing to CSV files')
+    parser.add_argument('--spike-threshold', type=float, default=4.0,
+                        metavar='PCT',
+                        help='Reject bars whose OHLC deviates more than PCT%% '
+                             'from the recent median close (default: 4.0)')
     args = parser.parse_args()
 
     if args.replay:
-        run_replay(args.ticker, args.threshold, args.dry_run)
+        run_replay(args.ticker, args.threshold, args.dry_run,
+                   spike_threshold=args.spike_threshold / 100.0)
     else:
-        run_live(args.ticker, args.threshold, args.dry_run)
+        run_live(args.ticker, args.threshold, args.dry_run,
+                 spike_threshold=args.spike_threshold / 100.0)
 
 
 def _excepthook(exc_type, exc_value, exc_tb) -> None:
