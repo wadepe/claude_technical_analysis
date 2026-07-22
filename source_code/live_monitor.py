@@ -37,6 +37,8 @@ Output CSV schemas
                       crossing already behind (pinched wedge); 0 = parallel
                       or diverging lines (no crossing)
       apex_price      price where they cross, $ (0 if no crossing)
+      mid_travel      wedge midline tilt across the window as a fraction of
+                      the window's price range (+ rising, - falling)
     (signal = 1 when score >= threshold AND the apex gate passes: converging
      lines with apex <= APEX_GATE_MAX_MIN ahead or already crossed. A bar with
      score >= threshold but signal = 0 was suppressed by the geometry gate.
@@ -488,7 +490,7 @@ def _init_spy_csv() -> None:
 
 
 _STAT_KEYS = ['proj_move_usd', 'slope_upper', 'slope_lower',
-              'apex_min', 'apex_price']
+              'apex_min', 'apex_price', 'mid_travel']
 
 WEDGE_COLUMNS = [
     'timestamp',
@@ -597,7 +599,8 @@ def _load_rolling_window(n_bars: int) -> deque:
 # =============================================================================
 
 _ZERO_STATS = {'proj_move_usd': 0.0, 'slope_upper': 0.0, 'slope_lower': 0.0,
-               'apex_min': 0, 'apex_price': 0.0, 'gate_ok': False}
+               'apex_min': 0, 'apex_price': 0.0, 'mid_travel': 0.0,
+               'gate_ok': False}
 
 
 def _wedge_stats(window_deque: deque, score: Optional[float],
@@ -647,6 +650,11 @@ def _wedge_stats(window_deque: deque, score: Optional[float],
         'slope_lower':   round(g['b_lower'], 6),
         'apex_min':      apex_min,
         'apex_price':    round(apex_price, 4),
+        # Wedge midline tilt across the window, as a fraction of the window's
+        # price range (+1 = climbed the full range; - = falling wedge). Logged
+        # raw so slope-based interpretations (e.g. the observed "steep-rising
+        # = quiet continuation" regime) can be evaluated on live data post-hoc.
+        'mid_travel':    round(travel_mid, 4),
         'gate_ok':       gate_ok,
     }
 
