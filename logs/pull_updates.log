@@ -53,3 +53,59 @@ From https://github.com/wadepe/claude_technical_analysis
 From https://github.com/wadepe/claude_technical_analysis
  * branch            master     -> FETCH_HEAD
 2026-07-21 03:00:02  [pull_updates]  Already up to date. No restart needed.
+2026-07-22 03:00:02  [pull_updates]  Fetching from origin/master ...
+From https://github.com/wadepe/claude_technical_analysis
+ * branch            master     -> FETCH_HEAD
+   6b2a902..a4cc0f4  master     -> origin/master
+From https://github.com/wadepe/claude_technical_analysis
+ * branch            master     -> FETCH_HEAD
+Updating 6b2a902..a4cc0f4
+Fast-forward
+ .gitignore                                     |   3 +
+ docker-compose.yml                             |  36 ++
+ docker/Dockerfile                              |  21 +
+ models/cnn_best.weights.h5                     | Bin 5915848 -> 5915848 bytes
+ models/cnn_final.weights.h5                    | Bin 5915848 -> 5915848 bytes
+ runs/window_250bar/models/cnn_best.weights.h5  | Bin 5915848 -> 5915848 bytes
+ runs/window_250bar/models/cnn_final.weights.h5 | Bin 5915848 -> 5915848 bytes
+ runs/window_50bar/models/cnn_best.weights.h5   | Bin 5915848 -> 5915848 bytes
+ runs/window_50bar/models/cnn_final.weights.h5  | Bin 5915848 -> 5915848 bytes
+ source_code/analyze_v2_families.py             | 115 ++++
+ source_code/backtest_btc.py                    |   5 +-
+ source_code/classify_wedge.py                  | 131 +++++
+ source_code/generate_wedges.py                 | 708 +++++++++++++++++++++++++
+ source_code/live_monitor.py                    | 210 +++++++-
+ source_code/nondud_projection.py               | 132 +++++
+ source_code/plot_daily.py                      |   5 +-
+ source_code/slope_move_study.py                | 190 +++++++
+ source_code/train_cnn.py                       |  66 ++-
+ source_code/vol_control_study.py               | 116 ++++
+ 19 files changed, 1695 insertions(+), 43 deletions(-)
+ create mode 100644 docker-compose.yml
+ create mode 100644 docker/Dockerfile
+ create mode 100644 source_code/analyze_v2_families.py
+ create mode 100644 source_code/classify_wedge.py
+ create mode 100644 source_code/generate_wedges.py
+ create mode 100644 source_code/nondud_projection.py
+ create mode 100644 source_code/slope_move_study.py
+ create mode 100644 source_code/vol_control_study.py
+2026-07-22 03:00:26  [pull_updates]  Pulled new commits (6b2a9022b2f98c64d23908b56ace8afe2e155d6f -> a4cc0f481a6dbb62834621ed5ebc921a3642fa24)
+2026-07-22 03:00:26  [pull_updates]  Code/model changes detected:
+2026-07-22 03:00:26  [pull_updates]    - models/cnn_best.weights.h5
+2026-07-22 03:00:26  [pull_updates]    - models/cnn_final.weights.h5
+2026-07-22 03:00:26  [pull_updates]    - runs/window_250bar/models/cnn_best.weights.h5
+2026-07-22 03:00:26  [pull_updates]    - runs/window_250bar/models/cnn_final.weights.h5
+2026-07-22 03:00:26  [pull_updates]    - runs/window_50bar/models/cnn_best.weights.h5
+2026-07-22 03:00:26  [pull_updates]    - runs/window_50bar/models/cnn_final.weights.h5
+2026-07-22 03:00:26  [pull_updates]    - source_code/analyze_v2_families.py
+2026-07-22 03:00:26  [pull_updates]    - source_code/backtest_btc.py
+2026-07-22 03:00:26  [pull_updates]    - source_code/classify_wedge.py
+2026-07-22 03:00:26  [pull_updates]    - source_code/generate_wedges.py
+2026-07-22 03:00:26  [pull_updates]    - source_code/live_monitor.py
+2026-07-22 03:00:26  [pull_updates]    - source_code/nondud_projection.py
+2026-07-22 03:00:26  [pull_updates]    - source_code/plot_daily.py
+2026-07-22 03:00:26  [pull_updates]    - source_code/slope_move_study.py
+2026-07-22 03:00:26  [pull_updates]    - source_code/train_cnn.py
+2026-07-22 03:00:26  [pull_updates]    - source_code/vol_control_study.py
+2026-07-22 03:00:26  [pull_updates]  Restarting live-monitor ...
+sudo: A terminal is required to authenticate
