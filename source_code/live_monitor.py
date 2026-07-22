@@ -26,8 +26,21 @@ Output CSV schemas
 
   rising_wedge.csv:
     timestamp, score_50bar, signal_50bar, score_250bar, signal_250bar,
-    bars_50, bars_250
-    (signal = 1 when score >= threshold, else 0; bars_* = current window depth)
+    bars_50, bars_250,
+    then per window (suffix _50bar / _250bar), zeros unless that window's
+    score cleared the threshold this bar:
+      proj_move_usd   projected |move| in dollars (linear model fit on the
+                      2008-2021 SPY slope study; see PROJ_* constants)
+      slope_upper     fitted upper trendline slope, $ per bar
+      slope_lower     fitted lower trendline slope, $ per bar
+      apex_min        minutes until the fitted trendlines cross; negative =
+                      crossing already behind (pinched wedge); 0 = parallel
+                      or diverging lines (no crossing)
+      apex_price      price where they cross, $ (0 if no crossing)
+    (signal = 1 when score >= threshold AND the apex gate passes: converging
+     lines with apex <= APEX_GATE_MAX_MIN ahead or already crossed. A bar with
+     score >= threshold but signal = 0 was suppressed by the geometry gate.
+     bars_* = current window depth)
 
 Usage
 -----
@@ -101,6 +114,26 @@ _crash_file_handler.setFormatter(logging.Formatter(
 log.addHandler(_crash_file_handler)
 
 FEATURE_COLS = ['open', 'high', 'low', 'close', 'volume']
+
+# ── Projected-move model (slope_move_study / nondud_projection, 2026-07-17) ──
+# Linear fit of |4hr move|% vs mid-trendline travel, on 1,130 resolved
+# (non-dud) 250-bar v2 detections over SPY 2008-2021:
+#     projected |move|% = 1.034 - 0.146 * travel_mid
+# where travel_mid = mean of upper/lower trendline travel across the window
+# (fraction of window price range). Note R^2 is small (~0.007): this is a
+# size *bias* given resolution, not a per-event forecast.
+PROJ_INTERCEPT_PCT = 1.034
+PROJ_TRAVEL_COEF   = -0.146
+
+# ── Apex gate ─────────────────────────────────────────────────────────────────
+# A bar only SIGNALS when, in addition to clearing the score threshold, its
+# fitted trendlines converge with an apex no more than this many minutes ahead
+# (already-crossed apexes pass: a fully pinched wedge is the most mature form).
+# Near-parallel fits (apex further out) and diverging fits are suppressed —
+# those channel-like shapes are left for dedicated channel models. Backtest
+# (SPY 2008-2021): keeps 80% of signals at ~unchanged resolution rate, drops
+# the 20% whose geometry is channel-like rather than wedge-like.
+APEX_GATE_MAX_MIN = 360
 
 
 # =============================================================================
@@ -454,14 +487,32 @@ def _init_spy_csv() -> None:
         log.info(f'Created {SPY_CSV}')
 
 
+_STAT_KEYS = ['proj_move_usd', 'slope_upper', 'slope_lower',
+              'apex_min', 'apex_price']
+
+WEDGE_COLUMNS = [
+    'timestamp',
+    'score_50bar', 'signal_50bar',
+    'score_250bar', 'signal_250bar',
+    'bars_50', 'bars_250',
+] + [f'{k}_50bar' for k in _STAT_KEYS] + [f'{k}_250bar' for k in _STAT_KEYS]
+
+
 def _init_wedge_csv() -> None:
+    if WEDGE_CSV.exists():
+        # Schema changed in v2 (wedge-geometry stat columns). Appending wider
+        # rows to a v1-header file would misalign the CSV — archive it and
+        # start fresh instead.
+        try:
+            header = pd.read_csv(WEDGE_CSV, nrows=0).columns.tolist()
+        except Exception:
+            header = []
+        if header != WEDGE_COLUMNS:
+            archived = WEDGE_CSV.with_name('rising_wedge_v1.csv')
+            WEDGE_CSV.rename(archived)
+            log.info(f'Schema change: archived old scores file to {archived}')
     if not WEDGE_CSV.exists():
-        pd.DataFrame(columns=[
-            'timestamp',
-            'score_50bar', 'signal_50bar',
-            'score_250bar', 'signal_250bar',
-            'bars_50', 'bars_250',
-        ]).to_csv(WEDGE_CSV, index=False)
+        pd.DataFrame(columns=WEDGE_COLUMNS).to_csv(WEDGE_CSV, index=False)
         log.info(f'Created {WEDGE_CSV}')
 
 
@@ -490,21 +541,35 @@ def _append_spy_row(bar: dict, dry_run: bool) -> None:
 
 
 def _append_wedge_row(ts: str, scores: dict, threshold: float,
-                      window_depths: dict, dry_run: bool) -> None:
-    def sig(s):
-        return 1 if (s is not None and not np.isnan(s) and s >= threshold) else 0
+                      window_depths: dict, dry_run: bool,
+                      stats: Optional[dict] = None) -> None:
+    stats = stats or {}
 
-    s50  = scores.get(50)
-    s250 = scores.get(250)
-    row  = pd.DataFrame([{
+    def sig(s, w):
+        if s is None or np.isnan(s) or s < threshold:
+            return 0
+        # Apex gate: geometry must be wedge-like (see APEX_GATE_MAX_MIN).
+        # Missing stats (defensive) fall back to score-only behaviour.
+        w_stats = stats.get(w)
+        return 1 if (w_stats is None or w_stats.get('gate_ok')) else 0
+
+    s50   = scores.get(50)
+    s250  = scores.get(250)
+    entry = {
         'timestamp':   ts,
         'score_50bar':  round(s50,  6) if s50  is not None else '',
-        'signal_50bar': sig(s50),
+        'signal_50bar': sig(s50, 50),
         'score_250bar': round(s250, 6) if s250 is not None else '',
-        'signal_250bar':sig(s250),
+        'signal_250bar':sig(s250, 250),
         'bars_50':  window_depths.get(50,  0),
         'bars_250': window_depths.get(250, 0),
-    }])
+    }
+    for w in (50, 250):
+        w_stats = stats.get(w, _ZERO_STATS)
+        for k in _STAT_KEYS:
+            entry[f'{k}_{w}bar'] = w_stats[k]
+
+    row = pd.DataFrame([entry], columns=WEDGE_COLUMNS)
     if not dry_run:
         row.to_csv(WEDGE_CSV, mode='a', header=False, index=False)
 
@@ -525,6 +590,65 @@ def _load_rolling_window(n_bars: int) -> deque:
         except Exception as exc:
             log.warning(f'  Could not pre-fill window: {exc}')
     return dq
+
+
+# =============================================================================
+# Wedge geometry stats for signalling bars
+# =============================================================================
+
+_ZERO_STATS = {'proj_move_usd': 0.0, 'slope_upper': 0.0, 'slope_lower': 0.0,
+               'apex_min': 0, 'apex_price': 0.0, 'gate_ok': False}
+
+
+def _wedge_stats(window_deque: deque, score: Optional[float],
+                 threshold: float) -> dict:
+    """
+    Fit trendlines on the raw window and derive the reported stats for a bar
+    whose score clears the threshold. Below-threshold (or unavailable) bars
+    get all-zero stats, per the output contract.
+
+      proj_move_usd  projected |move| in dollars (linear model, see constants)
+      slope_upper /  envelope trendline slopes in $ per bar
+      slope_lower
+      apex_min       minutes until the fitted lines cross; NEGATIVE when the
+                     crossing is already behind (fully pinched wedge);
+                     0 when the lines are parallel/diverging (no crossing)
+      apex_price     price at that crossing ($; 0 if no crossing)
+      gate_ok        apex gate verdict (internal, not written to the CSV):
+                     converging AND apex_min <= APEX_GATE_MAX_MIN ahead.
+                     The signal_* flag requires score >= threshold AND gate_ok,
+                     so a high-score bar with signal=0 was geometry-gated.
+    """
+    if score is None or score < threshold:
+        return dict(_ZERO_STATS)
+
+    from classify_wedge import fit_wedge_lines
+    arr = np.array(window_deque, dtype=np.float32)      # raw (n_bars, 5)
+    g   = fit_wedge_lines(arr)
+    n   = arr.shape[0]
+
+    close      = float(arr[-1, 3])
+    travel_mid = (g['travel_upper'] + g['travel_lower']) / 2.0
+    proj_pct   = max(PROJ_INTERCEPT_PCT + PROJ_TRAVEL_COEF * travel_mid, 0.0)
+
+    # Apex: crossing of upper/lower lines in raw price space.
+    apex_min, apex_price, gate_ok = 0, 0.0, False
+    db = g['b_upper'] - g['b_lower']
+    if db < -1e-12:                                     # converging lines
+        x_cross = (g['a_lower'] - g['a_upper']) / db    # bars from window start
+        ahead   = x_cross - (n - 1)                     # bars past current bar
+        apex_min   = int(round(ahead))                  # 1 bar = 1 minute
+        apex_price = float(g['a_upper'] + g['b_upper'] * x_cross)
+        gate_ok    = ahead <= APEX_GATE_MAX_MIN         # near or already pinched
+
+    return {
+        'proj_move_usd': round(close * proj_pct / 100.0, 4),
+        'slope_upper':   round(g['b_upper'], 6),        # $ per bar
+        'slope_lower':   round(g['b_lower'], 6),
+        'apex_min':      apex_min,
+        'apex_price':    round(apex_price, 4),
+        'gate_ok':       gate_ok,
+    }
 
 
 # =============================================================================
@@ -634,17 +758,20 @@ def run_live(ticker: str, threshold: float, dry_run: bool,
                 dq.append(bar_arr)
 
             # ── Score each window ─────────────────────────────────────────────
-            scores = {}
+            scores, stats = {}, {}
             for w, model in models.items():
                 scores[w] = _score_window(model, windows[w], n_bars_map[w])
+                stats[w]  = _wedge_stats(windows[w], scores[w], threshold)
 
             depths = {w: len(windows[w]) for w in windows}
 
             # ── Log + write ───────────────────────────────────────────────────
             s50  = scores.get(50)
             s250 = scores.get(250)
-            sig50  = (s50  is not None and s50  >= threshold)
-            sig250 = (s250 is not None and s250 >= threshold)
+            sig50  = (s50  is not None and s50  >= threshold
+                      and stats.get(50,  {}).get('gate_ok', False))
+            sig250 = (s250 is not None and s250 >= threshold
+                      and stats.get(250, {}).get('gate_ok', False))
 
             score_str = (
                 f'50bar={s50:.4f}{"*" if sig50 else " "}' if s50 is not None
@@ -654,14 +781,24 @@ def run_live(ticker: str, threshold: float, dry_run: bool,
                 else '250bar=n/a '
             )
 
+            wedge_note = ''
+            if sig50 or sig250:
+                st = stats[250] if sig250 else stats[50]
+                wedge_note = (
+                    f'  <<< WEDGE SIGNAL  proj_move=${st["proj_move_usd"]:.2f}'
+                    + (f'  apex in {st["apex_min"]}m @ ${st["apex_price"]:.2f}'
+                       if st['apex_min'] else '')
+                    + ' >>>'
+                )
+
             level = logging.WARNING if (sig50 or sig250) else logging.INFO
             log.log(level,
                 f'{bar["timestamp"]}  {ticker}  '
-                f'C={bar["close"]:.2f}  {score_str}'
-                + ('  <<< RISING WEDGE SIGNAL >>>' if (sig50 or sig250) else '')
+                f'C={bar["close"]:.2f}  {score_str}' + wedge_note
             )
 
-            _append_wedge_row(bar['timestamp'], scores, threshold, depths, dry_run)
+            _append_wedge_row(bar['timestamp'], scores, threshold, depths,
+                              dry_run, stats=stats)
 
         except KeyboardInterrupt:
             log.info('Stopped by user.')
@@ -729,17 +866,22 @@ def run_replay(ticker: str, threshold: float, dry_run: bool,
 
         scores = {w: _score_window(m, windows[w], n_bars_map[w])
                   for w, m in models.items()}
+        stats  = {w: _wedge_stats(windows[w], scores[w], threshold)
+                  for w in models}
         depths = {w: len(windows[w]) for w in windows}
 
-        sig50  = scores.get(50)  is not None and scores.get(50)  >= threshold
-        sig250 = scores.get(250) is not None and scores.get(250) >= threshold
+        sig50  = (scores.get(50)  is not None and scores.get(50)  >= threshold
+                  and stats.get(50,  {}).get('gate_ok', False))
+        sig250 = (scores.get(250) is not None and scores.get(250) >= threshold
+                  and stats.get(250, {}).get('gate_ok', False))
         if sig50 or sig250:
             signals += 1
             log.info(f'SIGNAL  {row["timestamp"]}  '
                      f'50bar={scores.get(50, "n/a")}  '
                      f'250bar={scores.get(250, "n/a")}')
 
-        _append_wedge_row(row['timestamp'], scores, threshold, depths, dry_run)
+        _append_wedge_row(row['timestamp'], scores, threshold, depths, dry_run,
+                          stats=stats)
 
     log.info(f'Replay complete. {signals} signal bars written to {WEDGE_CSV}  '
              f'({skipped} bar(s) rejected by spike filter)')
@@ -755,8 +897,10 @@ def main() -> None:
     )
     parser.add_argument('--ticker',    default='SPY',
                         help='Ticker symbol to monitor (default: SPY)')
-    parser.add_argument('--threshold', type=float, default=0.5,
-                        help='Score threshold for a signal (default: 0.5)')
+    parser.add_argument('--threshold', type=float, default=0.8,
+                        help='Score threshold for a signal (default: 0.8 — '
+                             'per the v2 held-out family analysis; at 0.5 the '
+                             'v2 models fire on ordinary channels)')
     parser.add_argument('--replay',    action='store_true',
                         help='Replay spy_data_1min.csv instead of live polling')
     parser.add_argument('--dry-run',   action='store_true',

@@ -194,8 +194,9 @@ def main() -> None:
                         help='Output PNG path (default: <data-dir>/rising_wedge_chart.png)')
     parser.add_argument('--ticker',    default='SPY',
                         help='Ticker label for titles (default: SPY)')
-    parser.add_argument('--threshold', type=float, default=0.5,
-                        help='Signal threshold line (default: 0.5)')
+    parser.add_argument('--threshold', type=float, default=0.8,
+                        help='Signal threshold line (default: 0.8, matching '
+                             'the live monitor)')
     parser.add_argument('--date',      default=None, metavar='YYYY-MM-DD',
                         help='Plot a specific trading day (default: most recent)')
     parser.add_argument('--all',       action='store_true',

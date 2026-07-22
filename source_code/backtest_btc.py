@@ -322,10 +322,13 @@ def main() -> None:
                         help='Path to model weights file')
     parser.add_argument('--output-dir', default=str(OUTPUT_DIR),
                         help='Directory for output charts and reports')
+    parser.add_argument('--csv',        default=str(BTC_CSV),
+                        help='Path to 1-min OHLCV CSV with a "date" column '
+                             '(default: the BTC reference data)')
     args = parser.parse_args()
 
     # ── Load data + model ─────────────────────────────────────────────────────
-    df = load_btc(BTC_CSV)
+    df = load_btc(Path(args.csv))
     print(f'\nLoading weights: {args.weights}')
     model = build_model(print_summary=False)
     model.load_weights(args.weights)

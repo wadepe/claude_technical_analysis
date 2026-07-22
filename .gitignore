@@ -54,3 +54,6 @@ add_btc_negatives.log
 
 # Claude internal config
 .claude/
+
+# Large local SPY minute-bar archives (backtest data, never committed)
+spy_1min_*.csv
