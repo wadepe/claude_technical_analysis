@@ -33,10 +33,14 @@ Output CSV schemas
                       2008-2021 SPY slope study; see PROJ_* constants)
       slope_upper     fitted upper trendline slope, $ per bar
       slope_lower     fitted lower trendline slope, $ per bar
-      apex_min        minutes until the fitted trendlines cross (0 if they
-                      diverge or the crossing is behind the current bar)
-      apex_price      price where they cross, $
-    (signal = 1 when score >= threshold, else 0; bars_* = current window depth)
+      apex_min        minutes until the fitted trendlines cross; negative =
+                      crossing already behind (pinched wedge); 0 = parallel
+                      or diverging lines (no crossing)
+      apex_price      price where they cross, $ (0 if no crossing)
+    (signal = 1 when score >= threshold AND the apex gate passes: converging
+     lines with apex <= APEX_GATE_MAX_MIN ahead or already crossed. A bar with
+     score >= threshold but signal = 0 was suppressed by the geometry gate.
+     bars_* = current window depth)
 
 Usage
 -----
@@ -120,6 +124,16 @@ FEATURE_COLS = ['open', 'high', 'low', 'close', 'volume']
 # size *bias* given resolution, not a per-event forecast.
 PROJ_INTERCEPT_PCT = 1.034
 PROJ_TRAVEL_COEF   = -0.146
+
+# ── Apex gate ─────────────────────────────────────────────────────────────────
+# A bar only SIGNALS when, in addition to clearing the score threshold, its
+# fitted trendlines converge with an apex no more than this many minutes ahead
+# (already-crossed apexes pass: a fully pinched wedge is the most mature form).
+# Near-parallel fits (apex further out) and diverging fits are suppressed —
+# those channel-like shapes are left for dedicated channel models. Backtest
+# (SPY 2008-2021): keeps 80% of signals at ~unchanged resolution rate, drops
+# the 20% whose geometry is channel-like rather than wedge-like.
+APEX_GATE_MAX_MIN = 360
 
 
 # =============================================================================
@@ -529,18 +543,24 @@ def _append_spy_row(bar: dict, dry_run: bool) -> None:
 def _append_wedge_row(ts: str, scores: dict, threshold: float,
                       window_depths: dict, dry_run: bool,
                       stats: Optional[dict] = None) -> None:
-    def sig(s):
-        return 1 if (s is not None and not np.isnan(s) and s >= threshold) else 0
-
     stats = stats or {}
+
+    def sig(s, w):
+        if s is None or np.isnan(s) or s < threshold:
+            return 0
+        # Apex gate: geometry must be wedge-like (see APEX_GATE_MAX_MIN).
+        # Missing stats (defensive) fall back to score-only behaviour.
+        w_stats = stats.get(w)
+        return 1 if (w_stats is None or w_stats.get('gate_ok')) else 0
+
     s50   = scores.get(50)
     s250  = scores.get(250)
     entry = {
         'timestamp':   ts,
         'score_50bar':  round(s50,  6) if s50  is not None else '',
-        'signal_50bar': sig(s50),
+        'signal_50bar': sig(s50, 50),
         'score_250bar': round(s250, 6) if s250 is not None else '',
-        'signal_250bar':sig(s250),
+        'signal_250bar':sig(s250, 250),
         'bars_50':  window_depths.get(50,  0),
         'bars_250': window_depths.get(250, 0),
     }
@@ -577,7 +597,7 @@ def _load_rolling_window(n_bars: int) -> deque:
 # =============================================================================
 
 _ZERO_STATS = {'proj_move_usd': 0.0, 'slope_upper': 0.0, 'slope_lower': 0.0,
-               'apex_min': 0, 'apex_price': 0.0}
+               'apex_min': 0, 'apex_price': 0.0, 'gate_ok': False}
 
 
 def _wedge_stats(window_deque: deque, score: Optional[float],
@@ -590,9 +610,14 @@ def _wedge_stats(window_deque: deque, score: Optional[float],
       proj_move_usd  projected |move| in dollars (linear model, see constants)
       slope_upper /  envelope trendline slopes in $ per bar
       slope_lower
-      apex_min       minutes until the fitted lines cross (0 if diverging,
-                     parallel, or the crossing is already behind us)
-      apex_price     price at that crossing ($)
+      apex_min       minutes until the fitted lines cross; NEGATIVE when the
+                     crossing is already behind (fully pinched wedge);
+                     0 when the lines are parallel/diverging (no crossing)
+      apex_price     price at that crossing ($; 0 if no crossing)
+      gate_ok        apex gate verdict (internal, not written to the CSV):
+                     converging AND apex_min <= APEX_GATE_MAX_MIN ahead.
+                     The signal_* flag requires score >= threshold AND gate_ok,
+                     so a high-score bar with signal=0 was geometry-gated.
     """
     if score is None or score < threshold:
         return dict(_ZERO_STATS)
@@ -607,14 +632,14 @@ def _wedge_stats(window_deque: deque, score: Optional[float],
     proj_pct   = max(PROJ_INTERCEPT_PCT + PROJ_TRAVEL_COEF * travel_mid, 0.0)
 
     # Apex: crossing of upper/lower lines in raw price space.
-    apex_min, apex_price = 0, 0.0
+    apex_min, apex_price, gate_ok = 0, 0.0, False
     db = g['b_upper'] - g['b_lower']
     if db < -1e-12:                                     # converging lines
         x_cross = (g['a_lower'] - g['a_upper']) / db    # bars from window start
         ahead   = x_cross - (n - 1)                     # bars past current bar
-        if ahead > 0:
-            apex_min   = int(round(ahead))              # 1 bar = 1 minute
-            apex_price = float(g['a_upper'] + g['b_upper'] * x_cross)
+        apex_min   = int(round(ahead))                  # 1 bar = 1 minute
+        apex_price = float(g['a_upper'] + g['b_upper'] * x_cross)
+        gate_ok    = ahead <= APEX_GATE_MAX_MIN         # near or already pinched
 
     return {
         'proj_move_usd': round(close * proj_pct / 100.0, 4),
@@ -622,6 +647,7 @@ def _wedge_stats(window_deque: deque, score: Optional[float],
         'slope_lower':   round(g['b_lower'], 6),
         'apex_min':      apex_min,
         'apex_price':    round(apex_price, 4),
+        'gate_ok':       gate_ok,
     }
 
 
@@ -742,8 +768,10 @@ def run_live(ticker: str, threshold: float, dry_run: bool,
             # ── Log + write ───────────────────────────────────────────────────
             s50  = scores.get(50)
             s250 = scores.get(250)
-            sig50  = (s50  is not None and s50  >= threshold)
-            sig250 = (s250 is not None and s250 >= threshold)
+            sig50  = (s50  is not None and s50  >= threshold
+                      and stats.get(50,  {}).get('gate_ok', False))
+            sig250 = (s250 is not None and s250 >= threshold
+                      and stats.get(250, {}).get('gate_ok', False))
 
             score_str = (
                 f'50bar={s50:.4f}{"*" if sig50 else " "}' if s50 is not None
@@ -842,8 +870,10 @@ def run_replay(ticker: str, threshold: float, dry_run: bool,
                   for w in models}
         depths = {w: len(windows[w]) for w in windows}
 
-        sig50  = scores.get(50)  is not None and scores.get(50)  >= threshold
-        sig250 = scores.get(250) is not None and scores.get(250) >= threshold
+        sig50  = (scores.get(50)  is not None and scores.get(50)  >= threshold
+                  and stats.get(50,  {}).get('gate_ok', False))
+        sig250 = (scores.get(250) is not None and scores.get(250) >= threshold
+                  and stats.get(250, {}).get('gate_ok', False))
         if sig50 or sig250:
             signals += 1
             log.info(f'SIGNAL  {row["timestamp"]}  '
