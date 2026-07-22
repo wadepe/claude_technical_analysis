@@ -166,6 +166,44 @@ def compute_class_weights(y: np.ndarray) -> dict[int, float]:
     }
 
 
+def make_weights_portable(path: Path) -> None:
+    """
+    Rewrite HDF5 group paths from Windows backslashes to forward slashes.
+
+    Keras builds .weights.h5 group paths with os.path.sep, so files saved on
+    Windows are unreadable on Linux ("expected 1 variables, received 0
+    variables during loading"). No-op when keys are already portable.
+    """
+    import h5py
+    bs = chr(92)
+
+    with h5py.File(path, 'r') as f:
+        items: list = []
+        f.visititems(lambda n, o: items.append(n))
+        if not any(bs in n for n in items):
+            return
+
+    tmp = path.with_suffix(path.suffix + '.portable')
+    with h5py.File(path, 'r') as fin, h5py.File(tmp, 'w') as fout:
+        for k, v in fin.attrs.items():
+            fout.attrs[k] = v
+
+        def copy(name, obj):
+            fixed = name.replace(bs, '/')
+            if isinstance(obj, h5py.Group):
+                g = fout.require_group(fixed)
+            else:
+                fout.create_dataset(fixed, data=obj[()])
+                g = fout[fixed]
+            for k, v in obj.attrs.items():
+                g.attrs[k] = v
+        fin.visititems(copy)
+
+    import os
+    os.replace(tmp, path)
+    print(f'Repaired Windows path separators in {path.name} (now portable)')
+
+
 def save_history_plot(history: keras.callbacks.History, out_path: Path) -> None:
     metrics = [
         ('loss',      'Binary Cross-Entropy Loss'),
@@ -342,6 +380,8 @@ def main() -> None:
 
     # ── Save final weights ────────────────────────────────────────────────────
     model.save_weights(final_weights_path)
+    for p in (best_weights_path, final_weights_path):
+        make_weights_portable(Path(p))
     print(f'\nBest weights  -> {best_weights_path}')
     print(f'Final weights -> {final_weights_path}')
 

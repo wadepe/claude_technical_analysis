@@ -1,0 +1,36 @@
+# Training pipeline in a Linux container (Windows dev box via Docker Desktop
+# + WSL2 backend). The live monitor is NOT containerized — it runs natively
+# on the Ubuntu server.
+#
+# IMPORTANT (performance): only the source code is bind-mounted from Windows.
+# Corpus parquet files and numpy caches live in the named volume `wedge_data`
+# (ext4 inside WSL2) — putting them on /mnt/c would make the 700K-file corpus
+# I/O-bound and painfully slow.
+#
+# Usage (from the repo root):
+#   docker compose build
+#   docker compose run train                                # 250-bar pipeline
+#   docker compose run -e WEDGE_TOTAL_BARS=50 train \
+#       python run_pipeline.py --window-size 50 --skip-btc-neg \
+#       --skip-scan --skip-backtest
+#
+# Weights land inside the volume; copy them out with e.g.:
+#   docker compose cp train:/data/runs/window_250bar/models/. runs/window_250bar/models/
+# (train_cnn.py also auto-repairs path separators, so even natively-trained
+#  weights are portable now — the container is defense in depth.)
+services:
+  train:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    volumes:
+      - ./source_code:/app/source_code
+      - wedge_data:/data
+    environment:
+      - PYTHONUNBUFFERED=1
+    command: >
+      python run_pipeline.py --window-size 250
+      --skip-btc-neg --skip-scan --skip-backtest
+
+volumes:
+  wedge_data:
