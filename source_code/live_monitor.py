@@ -897,8 +897,10 @@ def main() -> None:
     )
     parser.add_argument('--ticker',    default='SPY',
                         help='Ticker symbol to monitor (default: SPY)')
-    parser.add_argument('--threshold', type=float, default=0.5,
-                        help='Score threshold for a signal (default: 0.5)')
+    parser.add_argument('--threshold', type=float, default=0.8,
+                        help='Score threshold for a signal (default: 0.8 — '
+                             'per the v2 held-out family analysis; at 0.5 the '
+                             'v2 models fire on ordinary channels)')
     parser.add_argument('--replay',    action='store_true',
                         help='Replay spy_data_1min.csv instead of live polling')
     parser.add_argument('--dry-run',   action='store_true',
