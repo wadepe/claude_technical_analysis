@@ -135,6 +135,14 @@ PROJ_TRAVEL_COEF   = -0.146
 # the 20% whose geometry is channel-like rather than wedge-like.
 APEX_GATE_MAX_MIN = 360
 
+# Steep-rising wedges are additionally gated out: when the wedge midline's
+# travel across the window exceeds this fraction of the window's price range,
+# the shape is an orderly uptrend pausing, not a coiled spring. Evidence:
+# 2008-2021 backtest resolves 45.7% (below the 50% chance baseline) for
+# mid_travel > 0.5 vs 62% for falling wedges; live Jul-2026 replay: 0 of 7
+# such events resolved. Cut removes ~28% of signals (the worst ones).
+MID_TRAVEL_MAX = 0.5
+
 
 # =============================================================================
 # Timezone helper
@@ -639,7 +647,8 @@ def _wedge_stats(window_deque: deque, score: Optional[float],
         ahead   = x_cross - (n - 1)                     # bars past current bar
         apex_min   = int(round(ahead))                  # 1 bar = 1 minute
         apex_price = float(g['a_upper'] + g['b_upper'] * x_cross)
-        gate_ok    = ahead <= APEX_GATE_MAX_MIN         # near or already pinched
+        gate_ok    = (ahead <= APEX_GATE_MAX_MIN        # near or already pinched
+                      and travel_mid <= MID_TRAVEL_MAX) # not a steep-rising drift
 
     return {
         'proj_move_usd': round(close * proj_pct / 100.0, 4),
