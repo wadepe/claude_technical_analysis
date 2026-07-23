@@ -189,6 +189,9 @@ rm "$SERVICE_TMP"
 
 sudo systemctl daemon-reload
 sudo systemctl enable "$SERVICE_NAME"
+# Cron runs pull_updates.sh non-interactively; grant passwordless restart
+echo "$USER ALL=(root) NOPASSWD: /usr/bin/systemctl restart $SERVICE_NAME, /usr/bin/systemctl start $SERVICE_NAME" | sudo tee /etc/sudoers.d/live-monitor-cron >/dev/null
+sudo chmod 440 /etc/sudoers.d/live-monitor-cron
 echo "  Service installed and enabled at boot."
 echo ""
 

@@ -64,7 +64,7 @@ echo "$CHANGED" | while read -r f; do log "  - $f"; done
 # ── Restart the monitor service ───────────────────────────────────────────────
 if systemctl is-active --quiet "$SERVICE"; then
     log "Restarting $SERVICE ..."
-    sudo systemctl restart "$SERVICE"
+    sudo -n systemctl restart "$SERVICE" || { log "ERROR: passwordless sudo missing — run: echo \"$USER ALL=(root) NOPASSWD: /usr/bin/systemctl restart $SERVICE, /usr/bin/systemctl start $SERVICE\" | sudo tee /etc/sudoers.d/live-monitor-cron"; exit 1; }
     sleep 5
     if systemctl is-active --quiet "$SERVICE"; then
         log "$SERVICE restarted successfully."
@@ -74,5 +74,5 @@ if systemctl is-active --quiet "$SERVICE"; then
     fi
 else
     log "$SERVICE is not running — starting it now ..."
-    sudo systemctl start "$SERVICE"
+    sudo -n systemctl start "$SERVICE"
 fi
