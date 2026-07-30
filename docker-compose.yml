@@ -1,6 +1,10 @@
-# Training pipeline in a Linux container (Windows dev box via Docker Desktop
-# + WSL2 backend). The live monitor is NOT containerized — it runs natively
-# on the Ubuntu server.
+# Linux container work on the Windows dev box (Docker Desktop + WSL2 backend):
+#   train    — the corpus/training pipeline
+#   monitor  — replay/validate live_monitor.py against the deployed weights,
+#              which are forward-slash-repaired for Linux and do not load under
+#              Windows Keras
+# The live monitor still RUNS natively on the Ubuntu server; it is not deployed
+# from this compose file.
 #
 # IMPORTANT (performance): only the source code is bind-mounted from Windows.
 # Corpus parquet files and numpy caches live in the named volume `wedge_data`
@@ -31,6 +35,35 @@ services:
     command: >
       python run_pipeline.py --window-size 250
       --skip-btc-neg --skip-scan --skip-backtest
+
+  # Verify monitor changes on the server stack before pushing them. Unlike
+  # `train`, this mounts the whole repo root at /app, because live_monitor.py
+  # resolves PROJECT_ROOT as the parent of source_code/ and needs the deployed
+  # weights (runs/window_*bar/models/) and spy_data_1min.csv from there.
+  #
+  # Only the small live CSVs are read, so the bind mount over /mnt/c is fine —
+  # do NOT run the corpus pipeline through this service (use `train`, which
+  # keeps its data on the ext4 named volume).
+  #
+  #   docker compose run monitor                       # replay, writes nothing
+  #   docker compose run monitor python live_monitor.py --replay --dry-run \
+  #       --threshold 0.65                             # sweep a threshold
+  #
+  # The default command is --dry-run on purpose: a replay WITHOUT --dry-run
+  # rewrites the live rising_wedge.csv from scratch, discarding the server's
+  # accumulated output. The mount is read-write (crash.log is opened for append
+  # at import, so read-only would fail), which also means an error inside the
+  # container appends a local entry to the tracked crash.log — revert it with
+  # `git checkout -- crash.log` if that happens.
+  monitor:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    volumes:
+      - .:/app
+    environment:
+      - PYTHONUNBUFFERED=1
+    command: python live_monitor.py --replay --dry-run
 
 volumes:
   wedge_data:
