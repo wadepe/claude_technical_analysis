@@ -14,10 +14,14 @@ Behaviour
   - Rejects phantom prints: bars whose OHLC deviates more than
     --spike-threshold percent (default 4%) from the recent median close
     are skipped entirely (not written, not scored)
-  - Appends each completed bar to  spy_data_1min.csv
-  - Maintains rolling windows of 50 and 250 bars (filled from CSV on restart)
+  - Appends each completed bar to  spy_data_1min.csv  (extended hours included)
+  - Scores only regular-session bars, 9:30 AM-4:00 PM ET: extended-hours bars
+    carry zero volume from yfinance and are off-distribution for the models
+    (see the regular-session gate notes below; --score-extended-hours overrides)
+  - Maintains rolling windows of 50 and 250 bars of regular-session bars,
+    stitched across days (filled from CSV on restart)
   - Normalises each window and scores it with the matching CNN model
-  - Appends scores to  rising_wedge.csv
+  - Appends scores to  rising_wedge.csv  (regular-session bars only)
 
 Output CSV schemas
 ------------------
@@ -76,7 +80,7 @@ import os
 import sys
 import time
 from collections import deque
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone, timedelta, time as dtime
 from pathlib import Path
 from typing import Optional
 
@@ -97,6 +101,32 @@ CRASH_LOG    = PROJECT_ROOT / 'crash.log'
 MARKET_OPEN_H       = 4    # 4:00 AM ET  pre-market open
 MARKET_CLOSE_H      = 20   # 8:00 PM ET  fallback close (calendar unavailable)
 AFTERHOURS_BUFFER_H = 4    # hours of after-hours polling past the regular close
+
+# ── Regular-session gate ──────────────────────────────────────────────────────
+# Model windows hold REGULAR-session bars only (9:30 AM-4:00 PM ET, or the
+# early close on half-days), stitched across days. Extended-hours bars are still
+# fetched and appended to spy_data_1min.csv — the price history and the daily
+# chart keep full pre/post coverage — they are just never fed to the models and
+# get no row in rising_wedge.csv. Override with --score-extended-hours.
+#
+# Why (measured on the first five v2 days, 2026-07-23..29):
+#   * yfinance reports volume 0 for 100% of pre-market and 99.6% of after-hours
+#     bars. _normalise then divides the volume channel by its 1.0 guard instead
+#     of a real maximum, so the CNN sees a constant-zero 5th feature — whereas
+#     every training window is scaled to a volume max of exactly 1.0 (see
+#     _volume_profile in generate_wedges.py). Extended-hours input is therefore
+#     off-distribution on that feature by construction.
+#   * The tiny extended-hours price range is stretched across the full [0, 1]
+#     price scale, promoting tick noise to pattern-scale structure.
+#   * Both showed up in the scores: mean 50-bar score 0.71 after 4 PM vs 0.60
+#     in session, and 68% of all 250-bar signals fired post-close on 22% of the
+#     bars.
+# Regular hours only also matches what the models were validated on: the SPY
+# 2008-2021 backtest corpus is 390-bar regular sessions stitched across days,
+# with zero extended-hours bars. Those are the sessions behind the held-out
+# AUCs, the apex gate's keep rate, and the PROJ_* fit.
+REGULAR_OPEN_TIME  = dtime(9, 30)   # fallback when the NYSE calendar is absent
+REGULAR_CLOSE_TIME = dtime(16, 0)
 
 # ── Logging setup ─────────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -478,6 +508,84 @@ def _is_market_open() -> bool:
 
 
 # =============================================================================
+# Regular-session membership  (see the REGULAR_*_TIME notes above)
+# =============================================================================
+
+_SESSION_BOUNDS_CACHE = {}   # date -> (open_time, close_time) | None
+
+
+def _session_bounds(d) -> Optional[tuple]:
+    """
+    Return the regular NYSE session on date `d` as naive-ET (open, close)
+    `datetime.time` objects, or None if the market was closed that day.
+
+    Honours early closes (a half-day returns a 13:00 close). Falls back to a
+    weekday + 9:30-16:00 assumption when pandas_market_calendars is unavailable
+    — the same degradation as _is_market_open, i.e. holidays are not skipped.
+    Cached per date, so the calendar is queried once per trading day.
+    """
+    if d in _SESSION_BOUNDS_CACHE:
+        return _SESSION_BOUNDS_CACHE[d]
+
+    weekday_fallback = ((REGULAR_OPEN_TIME, REGULAR_CLOSE_TIME)
+                        if d.weekday() < 5 else None)
+
+    cal = _get_nyse_calendar()
+    if cal is None:
+        bounds = weekday_fallback
+    else:
+        try:
+            sched = cal.schedule(start_date=str(d), end_date=str(d))
+        except Exception as exc:
+            # Don't cache a transient failure as "market closed" — that would
+            # suppress scoring for the whole day.
+            log.warning(f'Calendar query failed for {d} ({exc}); '
+                        f'assuming regular hours')
+            return weekday_fallback
+        if sched.empty:
+            bounds = None                        # weekend or holiday
+        else:
+            tz = _et_zone()
+            bounds = (sched.iloc[0]['market_open'].tz_convert(tz).time(),
+                      sched.iloc[0]['market_close'].tz_convert(tz).time())
+
+    _SESSION_BOUNDS_CACHE[d] = bounds
+    return bounds
+
+
+def _is_regular_session_bar(ts) -> bool:
+    """
+    True if a naive-ET bar timestamp falls inside that day's regular session.
+
+    The interval is half-open, [open, close): a bar labelled 09:30 covers
+    09:30-09:31, so the last regular bar of a normal day is 15:59 and a full
+    session is 390 bars — matching the backtest corpus.
+    """
+    t = ts if isinstance(ts, datetime) else pd.Timestamp(ts).to_pydatetime()
+    bounds = _session_bounds(t.date())
+    if bounds is None:
+        return False
+    open_t, close_t = bounds
+    return open_t <= t.time() < close_t
+
+
+def _regular_session_mask(timestamps) -> pd.Series:
+    """
+    Vectorised _is_regular_session_bar for a Series of naive-ET timestamps.
+    One calendar lookup per distinct date rather than per bar.
+    """
+    ts     = pd.to_datetime(timestamps)
+    dates  = ts.dt.date
+    bounds = {d: _session_bounds(d) for d in pd.unique(dates)}
+
+    keep = []
+    for d, t in zip(dates, ts.dt.time):
+        b = bounds[d]
+        keep.append(b is not None and b[0] <= t < b[1])
+    return pd.Series(keep, index=ts.index)
+
+
+# =============================================================================
 # CSV helpers
 # =============================================================================
 
@@ -580,12 +688,24 @@ def _append_wedge_row(ts: str, scores: dict, threshold: float,
 # Rolling window init from existing CSV
 # =============================================================================
 
-def _load_rolling_window(n_bars: int) -> deque:
-    """Pre-fill a rolling window from the tail of spy_data_1min.csv."""
+def _load_rolling_window(n_bars: int, regular_only: bool = True) -> deque:
+    """
+    Pre-fill a rolling window from the tail of spy_data_1min.csv.
+
+    With regular_only (the default) the extended-hours rows are filtered out
+    first, so a restart during or after a session rebuilds the same window the
+    live loop would have built, instead of seeding it with zero-volume bars.
+    """
     dq = deque(maxlen=n_bars)
     if SPY_CSV.exists():
         try:
-            df = pd.read_csv(SPY_CSV, usecols=FEATURE_COLS)
+            df = pd.read_csv(SPY_CSV, usecols=['timestamp'] + FEATURE_COLS)
+            if regular_only:
+                keep    = _regular_session_mask(df['timestamp'])
+                dropped = int((~keep).sum())
+                df      = df[keep]
+                log.info(f'  Skipped {dropped:,} extended-hours row(s) '
+                         f'when pre-filling')
             for _, row in df.tail(n_bars).iterrows():
                 dq.append(row[FEATURE_COLS].values.astype(np.float32))
             log.info(f'  Pre-filled {n_bars}-bar window with {len(dq)} rows from CSV')
@@ -678,7 +798,7 @@ def _score_window(model, window_deque: deque, n_bars: int) -> Optional[float]:
 # =============================================================================
 
 def run_live(ticker: str, threshold: float, dry_run: bool,
-             spike_threshold: float = 0.04) -> None:
+             spike_threshold: float = 0.04, regular_only: bool = True) -> None:
     """Main monitoring loop — runs until keyboard interrupt."""
 
     # Load models
@@ -700,7 +820,8 @@ def run_live(ticker: str, threshold: float, dry_run: bool,
 
     # Pre-fill rolling windows from existing data
     log.info('Pre-filling rolling windows from existing CSV data ...')
-    windows = {w: _load_rolling_window(nb) for w, nb in n_bars_map.items()}
+    windows = {w: _load_rolling_window(nb, regular_only)
+               for w, nb in n_bars_map.items()}
 
     # Seed the spike filter's reference from the freshest pre-filled window
     # (row layout is [open, high, low, close, volume] — close is index 3)
@@ -713,6 +834,12 @@ def run_live(ticker: str, threshold: float, dry_run: bool,
     log.info(f'Last CSV timestamp: {last_ts or "none (fresh start)"}')
     log.info(f'Monitoring {ticker}  |  threshold={threshold}  |  '
              f'extended hours from {MARKET_OPEN_H}:00 ET')
+    log.info('Scoring: regular session only (9:30-16:00 ET); extended-hours '
+             'bars are logged to the price CSV but not scored.'
+             if regular_only else
+             'Scoring: ALL polled bars, including extended hours '
+             '(--score-extended-hours) — zero-volume bars are off-distribution '
+             'for the models; see the regular-session gate notes.')
 
     # Surface calendar status now so the operator knows whether holidays are
     # being skipped, instead of finding out at the first market-hours check.
@@ -756,7 +883,17 @@ def run_live(ticker: str, threshold: float, dry_run: bool,
                 continue
 
             # ── Append to price CSV ───────────────────────────────────────────
+            # Every accepted bar is stored, in session or not: the price history
+            # and the daily chart keep full pre/post-market coverage.
             _append_spy_row(bar, dry_run)
+
+            # ── Regular-session gate ──────────────────────────────────────────
+            # Extended-hours bars never reach the windows or the models, so they
+            # also cannot contaminate a later in-session window.
+            if regular_only and not _is_regular_session_bar(bar['timestamp']):
+                log.info(f'{bar["timestamp"]}  {ticker}  '
+                         f'C={bar["close"]:.2f}  extended hours — stored, not scored')
+                continue
 
             # ── Update rolling windows ────────────────────────────────────────
             bar_arr = np.array(
@@ -823,13 +960,14 @@ def run_live(ticker: str, threshold: float, dry_run: bool,
 # =============================================================================
 
 def run_replay(ticker: str, threshold: float, dry_run: bool,
-               spike_threshold: float = 0.04) -> None:
+               spike_threshold: float = 0.04, regular_only: bool = True) -> None:
     """
     Replay spy_data_1min.csv through both models as fast as possible.
     Useful for testing scoring logic without waiting for live data.
     Writes results to rising_wedge.csv (overwriting it for a clean replay).
     Applies the same spike filter as live mode, so bad ticks already stored
-    in the CSV (e.g. 2026-07-07 17:07) are skipped during re-scoring.
+    in the CSV (e.g. 2026-07-07 17:07) are skipped during re-scoring, and the
+    same regular-session gate, so a replay reproduces live scoring.
     """
     if not SPY_CSV.exists():
         raise SystemExit(f'{SPY_CSV} not found. Nothing to replay.')
@@ -837,6 +975,15 @@ def run_replay(ticker: str, threshold: float, dry_run: bool,
     log.info(f'Replaying {SPY_CSV} ...')
     df = pd.read_csv(SPY_CSV)
     log.info(f'  {len(df):,} bars  ({df["timestamp"].iloc[0]} to {df["timestamp"].iloc[-1]})')
+
+    if regular_only:
+        keep  = _regular_session_mask(df['timestamp'])
+        n_ext = int((~keep).sum())
+        df    = df[keep].reset_index(drop=True)
+        log.info(f'  Regular-session gate: dropped {n_ext:,} extended-hours '
+                 f'bar(s); {len(df):,} bar(s) to score')
+        if df.empty:
+            raise SystemExit('No regular-session bars to replay.')
 
     # Load models
     models     = {}
@@ -850,14 +997,10 @@ def run_replay(ticker: str, threshold: float, dry_run: bool,
     if not models:
         raise SystemExit('No models loaded.')
 
-    # Reset output CSV
+    # Reset output CSV. Must be the full WEDGE_COLUMNS header — _append_wedge_row
+    # writes all of them, so a short header silently misaligns the whole file.
     if not dry_run:
-        pd.DataFrame(columns=[
-            'timestamp',
-            'score_50bar', 'signal_50bar',
-            'score_250bar', 'signal_250bar',
-            'bars_50', 'bars_250',
-        ]).to_csv(WEDGE_CSV, index=False)
+        pd.DataFrame(columns=WEDGE_COLUMNS).to_csv(WEDGE_CSV, index=False)
 
     windows = {w: deque(maxlen=nb) for w, nb in n_bars_map.items()}
     signals = 0
@@ -891,7 +1034,11 @@ def run_replay(ticker: str, threshold: float, dry_run: bool,
         _append_wedge_row(row['timestamp'], scores, threshold, depths, dry_run,
                           stats=stats)
 
-    log.info(f'Replay complete. {signals} signal bars written to {WEDGE_CSV}  '
+    # Say what actually happened: under --dry-run nothing was written, and
+    # claiming otherwise reads as if the live scores file had been overwritten.
+    destination = ('nothing written (--dry-run)' if dry_run
+                   else f'written to {WEDGE_CSV}')
+    log.info(f'Replay complete. {signals} signal bar(s); {destination}  '
              f'({skipped} bar(s) rejected by spike filter)')
 
 
@@ -917,14 +1064,24 @@ def main() -> None:
                         metavar='PCT',
                         help='Reject bars whose OHLC deviates more than PCT%% '
                              'from the recent median close (default: 4.0)')
+    parser.add_argument('--score-extended-hours', action='store_true',
+                        help='Also score pre/after-hours bars. Off by default: '
+                             'yfinance reports zero volume outside the regular '
+                             'session, which is off-distribution for the models '
+                             '(see the regular-session gate notes). For '
+                             'experiments only.')
     args = parser.parse_args()
+
+    regular_only = not args.score_extended_hours
 
     if args.replay:
         run_replay(args.ticker, args.threshold, args.dry_run,
-                   spike_threshold=args.spike_threshold / 100.0)
+                   spike_threshold=args.spike_threshold / 100.0,
+                   regular_only=regular_only)
     else:
         run_live(args.ticker, args.threshold, args.dry_run,
-                 spike_threshold=args.spike_threshold / 100.0)
+                 spike_threshold=args.spike_threshold / 100.0,
+                 regular_only=regular_only)
 
 
 def _excepthook(exc_type, exc_value, exc_tb) -> None:
