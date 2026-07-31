@@ -1,0 +1,53 @@
+# wedge-api.service
+#
+# systemd unit for the read-only wedge.db HTTP API (source_code/api_server.py).
+# Serves /bars /scores /signals /latest /health as JSON on port 8321.
+#
+# Installation (run as root or with sudo):
+#   sudo cp wedge-api.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable wedge-api
+#   sudo systemctl start  wedge-api
+#
+# Check:
+#   curl http://localhost:8321/health
+#   journalctl -u wedge-api -f
+#
+# Optional auth: uncomment the WEDGE_API_TOKEN line below (pick a long random
+# string); clients must then send 'Authorization: Bearer <token>'.
+# The API itself has no TLS — keep the port on the LAN / Tailscale, or put a
+# reverse proxy in front; do not forward it raw to the internet.
+
+[Unit]
+Description=Wedge Data API (read-only wedge.db over HTTP)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# ── Change these two lines to match your username and repo path ──────────────
+User=ubuntu
+WorkingDirectory=/home/ubuntu/claude_technical_analysis/source_code
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Stdlib only, so the system python3 works too; use the venv for consistency.
+ExecStart=/bin/bash -c '\
+  if [ -f ../.venv/bin/python ]; then \
+    ../.venv/bin/python api_server.py --port 8321; \
+  else \
+    python3 api_server.py --port 8321; \
+  fi'
+
+# Environment=WEDGE_API_TOKEN=change-me-to-a-long-random-string
+
+Restart=always
+RestartSec=10
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=wedge-api
+
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target

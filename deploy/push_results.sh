@@ -1,8 +1,14 @@
 #!/usr/bin/env bash
 # push_results.sh
 #
-# Commits and pushes the latest SPY data files to GitHub.
+# Commits and pushes the server's LOG files to GitHub for remote visibility.
 # Scheduled via cron at 7:00 PM ET on weekdays.
+#
+# Since the SQLite migration (2026-07-30) the data itself lives in wedge.db
+# on the server and is served by the wedge-api service — it is NOT pushed to
+# git any more. Only crash.log and the cron logs go up. The daily chart is
+# still regenerated locally (from the database) for on-server review, but is
+# no longer committed.
 #
 # Cron entry (added by setup_server.sh):
 #   CRON_TZ=America/New_York
@@ -26,9 +32,9 @@ if ! git -C "$REPO_DIR" rev-parse --is-inside-work-tree &>/dev/null; then
     exit 1
 fi
 
-# ── Regenerate the daily chart before staging ─────────────────────────────────
+# ── Regenerate the daily chart (local review only, not committed) ─────────────
 # Use the virtualenv Python if present (matches live-monitor.service), else
-# system python3. A chart failure must NOT abort the data push, so we tolerate
+# system python3. A chart failure must NOT abort the log push, so we tolerate
 # a non-zero exit here despite 'set -e'.
 if [ -x "$REPO_DIR/.venv/bin/python" ]; then
     PY="$REPO_DIR/.venv/bin/python"
@@ -36,18 +42,18 @@ else
     PY="python3"
 fi
 if "$PY" "$REPO_DIR/source_code/plot_daily.py" --data-dir "$REPO_DIR"; then
-    log "Daily chart regenerated."
+    log "Daily chart regenerated (local only)."
 else
-    log "WARNING: chart generation failed — pushing data without an updated chart."
+    log "WARNING: chart generation failed."
 fi
 
-# ── Stage only the data output files ─────────────────────────────────────────
-# We intentionally do NOT do 'git add -A' — only the result files go to
-# GitHub from the server.  Code changes flow the other direction (dev → server).
-DATA_FILES=("spy_data_1min.csv" "rising_wedge.csv" "rising_wedge_chart.png" "crash.log"
-            "logs/push_results.log" "logs/pull_updates.log")
+# ── Stage only the log files ──────────────────────────────────────────────────
+# We intentionally do NOT do 'git add -A' — only logs go to GitHub from the
+# server. Code changes flow the other direction (dev -> server), and the data
+# lives in wedge.db, served by wedge-api.
+LOG_FILES=("crash.log" "logs/push_results.log" "logs/pull_updates.log")
 STAGED=0
-for f in "${DATA_FILES[@]}"; do
+for f in "${LOG_FILES[@]}"; do
     if [ -f "$REPO_DIR/$f" ]; then
         git add "$REPO_DIR/$f"
         STAGED=$((STAGED + 1))
@@ -57,7 +63,7 @@ for f in "${DATA_FILES[@]}"; do
 done
 
 if [ "$STAGED" -eq 0 ]; then
-    log "No data files found. Nothing to push."
+    log "No log files found. Nothing to push."
     exit 0
 fi
 
@@ -67,11 +73,22 @@ if git diff --cached --quiet; then
     exit 0
 fi
 
-ROWS_SPY=$(wc -l < "$REPO_DIR/spy_data_1min.csv" 2>/dev/null || echo "?")
-ROWS_WDG=$(wc -l < "$REPO_DIR/rising_wedge.csv"  2>/dev/null || echo "?")
+# Row counts from the database, for the commit subject (informational only;
+# cwd is REPO_DIR, where wedge.db lives).
+ROWS=$("$PY" - <<'PYEOF' 2>/dev/null || echo "db=?"
+import sqlite3
+try:
+    con = sqlite3.connect('file:wedge.db?mode=ro', uri=True)
+    b = con.execute('SELECT count(*) FROM bars').fetchone()[0]
+    s = con.execute('SELECT count(*) FROM scores').fetchone()[0]
+    print(f'bars={b}, scores={s}')
+except Exception:
+    print('db=?')
+PYEOF
+)
 
-git commit -m "auto: data update $(date '+%Y-%m-%d')  [spy=${ROWS_SPY}rows, wedge=${ROWS_WDG}rows]"
-log "Committed data update."
+git commit -m "auto: log update $(date '+%Y-%m-%d')  [${ROWS}]"
+log "Committed log update."
 
 # ── Push (retry once on transient network failure) ────────────────────────────
 if git push origin "$BRANCH"; then
