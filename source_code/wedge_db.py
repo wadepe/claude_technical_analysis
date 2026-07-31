@@ -1,0 +1,253 @@
+"""
+wedge_db.py
+
+SQLite storage for the live monitor. Replaces spy_data_1min.csv and
+rising_wedge.csv as the output sink (2026-07-30); the CSVs remain readable
+by the one-time migration below.
+
+Database:  <project root>/wedge.db      (WAL journal; gitignored)
+
+Schema
+------
+  bars(ts PK, open, high, low, close, volume)
+      Every accepted bar, extended hours included — full price history,
+      same coverage the price CSV had.
+
+  scores(ts, window, score, signal, bars)     PK (ts, window)
+      One row per scored bar per window size (50 / 250). Only
+      regular-session bars are scored (see live_monitor's session gate), so
+      extended-hours bars have a bars row and no scores rows. score is NULL
+      while the rolling window is still filling. `window` is data, not a
+      column name — a third window size is new rows, not a schema change
+      (the CSV's score_50bar/score_250bar columns were why the v1->v2
+      schema change forced an archive-and-restart).
+
+  signals(ts, window, proj_move_usd, slope_upper, slope_lower,
+          apex_min, apex_price, mid_travel)   PK (ts, window)
+      Wedge geometry, present ONLY where signal=1 — replaces the CSV
+      convention of zero-filled stat columns on every non-signal row.
+
+Timestamps are TEXT 'YYYY-MM-DD HH:MM:SS', naive America/New_York — exactly
+the strings the CSVs used. ISO text sorts chronologically, so BETWEEN range
+scans work, and there is no epoch/timezone conversion layer to get wrong.
+
+Concurrency: WAL mode — one writer (the monitor) plus any number of
+readers (API server, plot_daily, ad-hoc sqlite3). synchronous=NORMAL: a
+commit cannot corrupt the DB on power loss, though the last moments of
+writes may be lost; the next fetch re-covers the day anyway.
+
+CLI
+---
+  python wedge_db.py --migrate    # import spy_data_1min.csv + rising_wedge.csv
+  python wedge_db.py --stats      # row counts and time range
+  (--db / --spy-csv / --wedge-csv override the default paths)
+"""
+
+from __future__ import annotations
+
+import sqlite3
+from pathlib import Path
+from typing import Optional
+
+PROJECT_ROOT = Path(__file__).parent.parent
+DB_PATH      = PROJECT_ROOT / 'wedge.db'
+
+STAT_KEYS = ['proj_move_usd', 'slope_upper', 'slope_lower',
+             'apex_min', 'apex_price', 'mid_travel']
+
+_SCHEMA = f"""
+CREATE TABLE IF NOT EXISTS bars (
+    ts     TEXT PRIMARY KEY,
+    open   REAL, high REAL, low REAL, close REAL, volume REAL
+) WITHOUT ROWID;
+
+CREATE TABLE IF NOT EXISTS scores (
+    ts     TEXT    NOT NULL,
+    window INTEGER NOT NULL,
+    score  REAL,
+    signal INTEGER NOT NULL DEFAULT 0,
+    bars   INTEGER,
+    PRIMARY KEY (ts, window)
+) WITHOUT ROWID;
+
+CREATE TABLE IF NOT EXISTS signals (
+    ts     TEXT    NOT NULL,
+    window INTEGER NOT NULL,
+    {', '.join(f'{k} REAL' for k in STAT_KEYS)},
+    PRIMARY KEY (ts, window)
+) WITHOUT ROWID;
+"""
+
+
+def connect(path: Path | str = DB_PATH, readonly: bool = False
+            ) -> sqlite3.Connection:
+    """
+    Open the database. Writers get WAL + NORMAL sync and the schema is
+    ensured; readers get an immutable-safe read-only connection.
+    """
+    if readonly:
+        con = sqlite3.connect(f'file:{path}?mode=ro', uri=True)
+    else:
+        con = sqlite3.connect(str(path))
+        con.execute('PRAGMA journal_mode=WAL')
+        con.execute('PRAGMA synchronous=NORMAL')
+        con.executescript(_SCHEMA)
+    con.row_factory = sqlite3.Row
+    return con
+
+
+# =============================================================================
+# Write path (the monitor)
+# =============================================================================
+
+def write_bar(con: sqlite3.Connection, bar: dict) -> None:
+    """Store one price bar. OR REPLACE: a re-served yfinance bar is an update."""
+    with con:
+        con.execute('INSERT OR REPLACE INTO bars VALUES (?,?,?,?,?,?)',
+                    (bar['timestamp'], bar['open'], bar['high'],
+                     bar['low'], bar['close'], bar['volume']))
+
+
+def write_minute(con: sqlite3.Connection, bar: dict, scores: dict,
+                 sigs: dict, stats: dict, depths: dict) -> None:
+    """
+    Store one fully-scored minute atomically: the bar, a scores row per
+    window, and a signals row for each window whose signal fired.
+    """
+    ts = bar['timestamp']
+    with con:
+        con.execute('INSERT OR REPLACE INTO bars VALUES (?,?,?,?,?,?)',
+                    (ts, bar['open'], bar['high'], bar['low'],
+                     bar['close'], bar['volume']))
+        for w, score in scores.items():
+            con.execute('INSERT OR REPLACE INTO scores VALUES (?,?,?,?,?)',
+                        (ts, w, score, sigs.get(w, 0), depths.get(w, 0)))
+            if sigs.get(w):
+                st = stats[w]
+                con.execute(
+                    f'INSERT OR REPLACE INTO signals VALUES '
+                    f'({",".join("?" * (2 + len(STAT_KEYS)))})',
+                    tuple([ts, w] + [st[k] for k in STAT_KEYS]))
+
+
+def clear_scores(con: sqlite3.Connection) -> None:
+    """Drop all model output (bars are kept). Used by a clean replay."""
+    with con:
+        con.execute('DELETE FROM scores')
+        con.execute('DELETE FROM signals')
+
+
+# =============================================================================
+# Read path
+# =============================================================================
+
+def last_bar_ts(con: sqlite3.Connection) -> Optional[str]:
+    row = con.execute('SELECT max(ts) AS ts FROM bars').fetchone()
+    return row['ts'] if row and row['ts'] else None
+
+
+def bar_count(con: sqlite3.Connection) -> int:
+    return con.execute('SELECT count(*) AS n FROM bars').fetchone()['n']
+
+
+def all_bars(con: sqlite3.Connection):
+    """All bars in chronological order as (ts, open, high, low, close, volume)."""
+    return con.execute(
+        'SELECT ts, open, high, low, close, volume FROM bars ORDER BY ts'
+    ).fetchall()
+
+
+# =============================================================================
+# One-time CSV migration
+# =============================================================================
+
+def migrate_csvs(con: sqlite3.Connection,
+                 spy_csv: Path, wedge_csv: Path) -> dict:
+    """
+    Import the legacy CSVs. Idempotent: OR REPLACE keys on timestamp, so
+    re-running (or running after the monitor has already written rows) only
+    overwrites the same keys. Duplicate CSV timestamps collapse to the last
+    occurrence, which also dedups the historical files for free.
+    """
+    import pandas as pd
+
+    counts = {'bars': 0, 'scores': 0, 'signals': 0}
+
+    if spy_csv.exists():
+        spy = pd.read_csv(spy_csv)
+        with con:
+            con.executemany(
+                'INSERT OR REPLACE INTO bars VALUES (?,?,?,?,?,?)',
+                spy[['timestamp', 'open', 'high', 'low',
+                     'close', 'volume']].values.tolist())
+        counts['bars'] = len(spy)
+
+    if wedge_csv.exists():
+        wdg = pd.read_csv(wedge_csv)
+        srows, grows = [], []
+        for w in (50, 250):
+            need = {f'score_{w}bar', f'signal_{w}bar', f'bars_{w}'}
+            if not need.issubset(wdg.columns):
+                continue   # pre-v2 file; only v2 columns are migrated
+            for _, r in wdg.iterrows():
+                score = r[f'score_{w}bar']
+                score = None if pd.isna(score) else float(score)
+                sig   = int(r[f'signal_{w}bar']) if pd.notna(r[f'signal_{w}bar']) else 0
+                srows.append((r['timestamp'], w, score, sig,
+                              int(r[f'bars_{w}'])))
+                if sig:
+                    grows.append(tuple(
+                        [r['timestamp'], w]
+                        + [float(r[f'{k}_{w}bar']) for k in STAT_KEYS]))
+        with con:
+            con.executemany('INSERT OR REPLACE INTO scores VALUES (?,?,?,?,?)',
+                            srows)
+            con.executemany(
+                f'INSERT OR REPLACE INTO signals VALUES '
+                f'({",".join("?" * (2 + len(STAT_KEYS)))})', grows)
+        counts['scores']  = len(srows)
+        counts['signals'] = len(grows)
+
+    return counts
+
+
+def stats(con: sqlite3.Connection) -> str:
+    lines = []
+    for table in ('bars', 'scores', 'signals'):
+        r = con.execute(f'SELECT count(*) AS n, min(ts) AS lo, max(ts) AS hi '
+                        f'FROM {table}').fetchone()
+        lines.append(f'  {table:8s} {r["n"]:>9,} rows'
+                     + (f'   {r["lo"]}  ->  {r["hi"]}' if r['n'] else ''))
+    return '\n'.join(lines)
+
+
+# =============================================================================
+# CLI
+# =============================================================================
+
+def main() -> None:
+    import argparse
+    p = argparse.ArgumentParser(description='Wedge monitor SQLite utilities')
+    p.add_argument('--db',        default=str(DB_PATH))
+    p.add_argument('--spy-csv',   default=str(PROJECT_ROOT / 'spy_data_1min.csv'))
+    p.add_argument('--wedge-csv', default=str(PROJECT_ROOT / 'rising_wedge.csv'))
+    p.add_argument('--migrate', action='store_true',
+                   help='Import the legacy CSVs into the database')
+    p.add_argument('--stats',   action='store_true',
+                   help='Print row counts and time ranges')
+    args = p.parse_args()
+
+    con = connect(args.db)
+    if args.migrate:
+        c = migrate_csvs(con, Path(args.spy_csv), Path(args.wedge_csv))
+        print(f'Migrated: {c["bars"]:,} bar rows, {c["scores"]:,} score rows, '
+              f'{c["signals"]:,} signal rows  ->  {args.db}')
+    if args.stats or args.migrate:
+        print(stats(con))
+    if not (args.migrate or args.stats):
+        p.print_help()
+    con.close()
+
+
+if __name__ == '__main__':
+    main()

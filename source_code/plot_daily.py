@@ -7,9 +7,9 @@ just before the 7 PM ET commit, so the chart is pushed alongside the CSVs.
 
 Reads (from the project root)
 -----------------------------
-  spy_data_1min.csv   timestamp, open, high, low, close, volume
-  rising_wedge.csv    timestamp, score_50bar, signal_50bar,
-                      score_250bar, signal_250bar, bars_50, bars_250
+  wedge.db            bars + scores tables (see wedge_db.py); falls back to
+                      the legacy spy_data_1min.csv / rising_wedge.csv pair
+                      when no database exists yet
 
 Writes
 ------
@@ -71,13 +71,53 @@ def _style(ax: plt.Axes) -> None:
 # Data loading
 # =============================================================================
 
-def load_merged(spy_csv: Path, wedge_csv: Path) -> pd.DataFrame:
+def load_from_db(db_path: Path) -> pd.DataFrame:
     """
-    Load and merge the price and score CSVs on timestamp.
+    Load bars joined with per-window scores from wedge.db into the same wide
+    frame the CSV pair used (score_50bar, signal_50bar, ...), so the plotting
+    code below needs no changes.
+    """
+    import sqlite3
+    con = sqlite3.connect(f'file:{db_path}?mode=ro', uri=True)
+    try:
+        spy = pd.read_sql_query(
+            'SELECT ts AS timestamp, open, high, low, close, volume '
+            'FROM bars ORDER BY ts', con, parse_dates=['timestamp'])
+        sc = pd.read_sql_query(
+            'SELECT ts AS timestamp, window, score, signal FROM scores', con,
+            parse_dates=['timestamp'])
+    finally:
+        con.close()
+    if spy.empty:
+        return spy
+
+    df = spy
+    if not sc.empty:
+        wide = sc.pivot(index='timestamp', columns='window',
+                        values=['score', 'signal'])
+        wide.columns = [f'{a}_{b}bar' for a, b in wide.columns]
+        df = spy.merge(wide.reset_index(), on='timestamp', how='left')
+    return df
+
+
+def load_merged(spy_csv: Path, wedge_csv: Path,
+                db_path: Path | None = None) -> pd.DataFrame:
+    """
+    Load price + score data, preferring wedge.db and falling back to the
+    legacy CSV pair.
 
     Returns an empty DataFrame if there is no price data yet (e.g. the monitor
     has not run), so callers can skip gracefully instead of crashing.
     """
+    if db_path is not None and db_path.exists():
+        df = load_from_db(db_path)
+        if not df.empty:
+            for col in ('score_50bar', 'score_250bar',
+                        'signal_50bar', 'signal_250bar'):
+                if col in df:
+                    df[col] = pd.to_numeric(df[col], errors='coerce')
+            return df.sort_values('timestamp').reset_index(drop=True)
+
     if not spy_csv.exists():
         return pd.DataFrame()
 
@@ -208,9 +248,9 @@ def main() -> None:
     wedge_csv = Path(args.wedge_csv) if args.wedge_csv else root / 'rising_wedge.csv'
     out_path  = Path(args.output)    if args.output    else root / 'rising_wedge_chart.png'
 
-    df = load_merged(spy_csv, wedge_csv)
+    df = load_merged(spy_csv, wedge_csv, db_path=root / 'wedge.db')
     if df.empty:
-        print(f'No price data in {spy_csv} yet — skipping chart generation.')
+        print(f'No price data in {root} yet — skipping chart generation.')
         return   # exit 0 so the caller (push_results.sh) is not aborted
 
     # ── Select the day to plot ────────────────────────────────────────────────

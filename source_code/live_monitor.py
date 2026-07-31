@@ -14,39 +14,31 @@ Behaviour
   - Rejects phantom prints: bars whose OHLC deviates more than
     --spike-threshold percent (default 4%) from the recent median close
     are skipped entirely (not written, not scored)
-  - Appends each completed bar to  spy_data_1min.csv  (extended hours included)
+  - Stores every completed bar in  wedge.db  (SQLite, extended hours included)
   - Scores only regular-session bars, 9:30 AM-4:00 PM ET: extended-hours bars
     carry zero volume from yfinance and are off-distribution for the models
     (see the regular-session gate notes below; --score-extended-hours overrides)
   - Maintains rolling windows of 50 and 250 bars of regular-session bars,
-    stitched across days (filled from CSV on restart)
+    stitched across days (filled from the database on restart)
   - Normalises each window and scores it with the matching CNN model
-  - Appends scores to  rising_wedge.csv  (regular-session bars only)
+  - Writes bar + scores + signal geometry atomically, one transaction/minute
 
-Output CSV schemas
-------------------
-  spy_data_1min.csv:
-    timestamp (ISO 8601), open, high, low, close, volume
-
-  rising_wedge.csv:
-    timestamp, score_50bar, signal_50bar, score_250bar, signal_250bar,
-    bars_50, bars_250,
-    then per window (suffix _50bar / _250bar), zeros unless that window's
-    score cleared the threshold this bar:
-      proj_move_usd   projected |move| in dollars (linear model fit on the
-                      2008-2021 SPY slope study; see PROJ_* constants)
-      slope_upper     fitted upper trendline slope, $ per bar
-      slope_lower     fitted lower trendline slope, $ per bar
-      apex_min        minutes until the fitted trendlines cross; negative =
-                      crossing already behind (pinched wedge); 0 = parallel
-                      or diverging lines (no crossing)
-      apex_price      price where they cross, $ (0 if no crossing)
-      mid_travel      wedge midline tilt across the window as a fraction of
-                      the window's price range (+ rising, - falling)
+Output
+------
+  wedge.db (SQLite; see wedge_db.py for the full schema and rationale):
+    bars(ts, open, high, low, close, volume)     every accepted bar
+    scores(ts, window, score, signal, bars)      regular-session bars only
+    signals(ts, window, proj_move_usd, slope_upper, slope_lower,
+            apex_min, apex_price, mid_travel)    rows exist only where
+                                                 signal = 1
     (signal = 1 when score >= threshold AND the apex gate passes: converging
-     lines with apex <= APEX_GATE_MAX_MIN ahead or already crossed. A bar with
-     score >= threshold but signal = 0 was suppressed by the geometry gate.
-     bars_* = current window depth)
+     lines with apex <= APEX_GATE_MAX_MIN ahead or already crossed. A scores
+     row with a high score and signal = 0 was suppressed by the geometry
+     gate. For the meaning of the geometry columns see _wedge_stats.)
+
+  On first start after the CSV era, an empty database is populated
+  automatically from spy_data_1min.csv / rising_wedge.csv if they exist
+  (idempotent; see wedge_db.migrate_csvs). The CSVs are no longer written.
 
 Usage
 -----
@@ -56,7 +48,7 @@ Usage
   # Different ticker / stricter threshold
   python live_monitor.py --ticker QQQ --threshold 0.65
 
-  # Replay an existing spy_data_1min.csv without waiting for the clock
+  # Re-score the stored bar history without waiting for the clock
   python live_monitor.py --replay
 
   # Dry-run: print what would be written without touching the CSVs
@@ -87,11 +79,16 @@ from typing import Optional
 import numpy as np
 import pandas as pd
 
+import wedge_db
+
 # ── Paths ─────────────────────────────────────────────────────────────────────
 PROJECT_ROOT = Path(__file__).parent.parent
+DB_PATH      = PROJECT_ROOT / 'wedge.db'
+CRASH_LOG    = PROJECT_ROOT / 'crash.log'
+# Legacy CSVs: no longer written; kept as the migration source and as a
+# read fallback until the database exists.
 SPY_CSV      = PROJECT_ROOT / 'spy_data_1min.csv'
 WEDGE_CSV    = PROJECT_ROOT / 'rising_wedge.csv'
-CRASH_LOG    = PROJECT_ROOT / 'crash.log'
 
 # ── Market hours (US/Eastern) ─────────────────────────────────────────────────
 # Covers pre-market (4 AM), regular session (9:30 AM-4:00 PM), after-hours (to 8 PM).
@@ -586,102 +583,57 @@ def _regular_session_mask(timestamps) -> pd.Series:
 
 
 # =============================================================================
-# CSV helpers
+# Database helpers  (schema and write functions live in wedge_db.py)
 # =============================================================================
 
-def _init_spy_csv() -> None:
-    if not SPY_CSV.exists():
-        pd.DataFrame(columns=['timestamp'] + FEATURE_COLS).to_csv(
-            SPY_CSV, index=False
-        )
-        log.info(f'Created {SPY_CSV}')
+_STAT_KEYS = wedge_db.STAT_KEYS
 
 
-_STAT_KEYS = ['proj_move_usd', 'slope_upper', 'slope_lower',
-              'apex_min', 'apex_price', 'mid_travel']
+def _open_db(dry_run: bool):
+    """
+    Open wedge.db, auto-migrating the legacy CSVs into it on the first run
+    after the CSV era (empty bars table + CSVs present). Migration is
+    idempotent, so a crash halfway simply re-runs next start.
 
-WEDGE_COLUMNS = [
-    'timestamp',
-    'score_50bar', 'signal_50bar',
-    'score_250bar', 'signal_250bar',
-    'bars_50', 'bars_250',
-] + [f'{k}_50bar' for k in _STAT_KEYS] + [f'{k}_250bar' for k in _STAT_KEYS]
+    In dry-run mode nothing is created or migrated; an existing database is
+    opened read-only for pre-filling, and a missing one yields None (the CSV
+    fallback in _load_bars_frame covers that).
+    """
+    if dry_run:
+        if DB_PATH.exists():
+            return wedge_db.connect(DB_PATH, readonly=True)
+        log.info(f'[dry-run] {DB_PATH.name} absent — falling back to CSVs '
+                 f'for pre-fill; no database will be created.')
+        return None
+
+    con = wedge_db.connect(DB_PATH)
+    if wedge_db.bar_count(con) == 0 and SPY_CSV.exists():
+        log.info(f'Empty database + legacy CSVs found — migrating ...')
+        c = wedge_db.migrate_csvs(con, SPY_CSV, WEDGE_CSV)
+        log.info(f'  Migrated {c["bars"]:,} bars, {c["scores"]:,} score rows, '
+                 f'{c["signals"]:,} signal rows into {DB_PATH.name}')
+    return con
 
 
-def _init_wedge_csv() -> None:
-    if WEDGE_CSV.exists():
-        # Schema changed in v2 (wedge-geometry stat columns). Appending wider
-        # rows to a v1-header file would misalign the CSV — archive it and
-        # start fresh instead.
+def _load_bars_frame() -> pd.DataFrame:
+    """
+    Full bar history as a DataFrame (timestamp + OHLCV), preferring the
+    database and falling back to the legacy CSV. Read-only.
+    """
+    if DB_PATH.exists():
+        con = wedge_db.connect(DB_PATH, readonly=True)
         try:
-            header = pd.read_csv(WEDGE_CSV, nrows=0).columns.tolist()
-        except Exception:
-            header = []
-        if header != WEDGE_COLUMNS:
-            archived = WEDGE_CSV.with_name('rising_wedge_v1.csv')
-            WEDGE_CSV.rename(archived)
-            log.info(f'Schema change: archived old scores file to {archived}')
-    if not WEDGE_CSV.exists():
-        pd.DataFrame(columns=WEDGE_COLUMNS).to_csv(WEDGE_CSV, index=False)
-        log.info(f'Created {WEDGE_CSV}')
-
-
-def _last_timestamp() -> Optional[str]:
-    """Return the most recent timestamp in spy_data_1min.csv, or None."""
-    if not SPY_CSV.exists():
-        return None
-    try:
-        df = pd.read_csv(SPY_CSV, usecols=['timestamp'])
-        return df['timestamp'].iloc[-1] if len(df) else None
-    except Exception:
-        return None
-
-
-def _append_spy_row(bar: dict, dry_run: bool) -> None:
-    row = pd.DataFrame([{
-        'timestamp': bar['timestamp'],
-        'open':      bar['open'],
-        'high':      bar['high'],
-        'low':       bar['low'],
-        'close':     bar['close'],
-        'volume':    bar['volume'],
-    }])
-    if not dry_run:
-        row.to_csv(SPY_CSV, mode='a', header=False, index=False)
-
-
-def _append_wedge_row(ts: str, scores: dict, threshold: float,
-                      window_depths: dict, dry_run: bool,
-                      stats: Optional[dict] = None) -> None:
-    stats = stats or {}
-
-    def sig(s, w):
-        if s is None or np.isnan(s) or s < threshold:
-            return 0
-        # Apex gate: geometry must be wedge-like (see APEX_GATE_MAX_MIN).
-        # Missing stats (defensive) fall back to score-only behaviour.
-        w_stats = stats.get(w)
-        return 1 if (w_stats is None or w_stats.get('gate_ok')) else 0
-
-    s50   = scores.get(50)
-    s250  = scores.get(250)
-    entry = {
-        'timestamp':   ts,
-        'score_50bar':  round(s50,  6) if s50  is not None else '',
-        'signal_50bar': sig(s50, 50),
-        'score_250bar': round(s250, 6) if s250 is not None else '',
-        'signal_250bar':sig(s250, 250),
-        'bars_50':  window_depths.get(50,  0),
-        'bars_250': window_depths.get(250, 0),
-    }
-    for w in (50, 250):
-        w_stats = stats.get(w, _ZERO_STATS)
-        for k in _STAT_KEYS:
-            entry[f'{k}_{w}bar'] = w_stats[k]
-
-    row = pd.DataFrame([entry], columns=WEDGE_COLUMNS)
-    if not dry_run:
-        row.to_csv(WEDGE_CSV, mode='a', header=False, index=False)
+            rows = wedge_db.all_bars(con)
+        finally:
+            con.close()
+        if rows:
+            return pd.DataFrame(rows, columns=['timestamp'] + FEATURE_COLS)
+    if SPY_CSV.exists():
+        try:
+            return pd.read_csv(SPY_CSV, usecols=['timestamp'] + FEATURE_COLS)
+        except Exception as exc:
+            log.warning(f'Could not read {SPY_CSV}: {exc}')
+    return pd.DataFrame(columns=['timestamp'] + FEATURE_COLS)
 
 
 # =============================================================================
@@ -690,27 +642,29 @@ def _append_wedge_row(ts: str, scores: dict, threshold: float,
 
 def _load_rolling_window(n_bars: int, regular_only: bool = True) -> deque:
     """
-    Pre-fill a rolling window from the tail of spy_data_1min.csv.
+    Pre-fill a rolling window from the tail of the stored bar history
+    (database, or legacy CSV before migration).
 
     With regular_only (the default) the extended-hours rows are filtered out
     first, so a restart during or after a session rebuilds the same window the
     live loop would have built, instead of seeding it with zero-volume bars.
     """
     dq = deque(maxlen=n_bars)
-    if SPY_CSV.exists():
-        try:
-            df = pd.read_csv(SPY_CSV, usecols=['timestamp'] + FEATURE_COLS)
-            if regular_only:
-                keep    = _regular_session_mask(df['timestamp'])
-                dropped = int((~keep).sum())
-                df      = df[keep]
-                log.info(f'  Skipped {dropped:,} extended-hours row(s) '
-                         f'when pre-filling')
-            for _, row in df.tail(n_bars).iterrows():
-                dq.append(row[FEATURE_COLS].values.astype(np.float32))
-            log.info(f'  Pre-filled {n_bars}-bar window with {len(dq)} rows from CSV')
-        except Exception as exc:
-            log.warning(f'  Could not pre-fill window: {exc}')
+    try:
+        df = _load_bars_frame()
+        if df.empty:
+            return dq
+        if regular_only:
+            keep    = _regular_session_mask(df['timestamp'])
+            dropped = int((~keep).sum())
+            df      = df[keep]
+            log.info(f'  Skipped {dropped:,} extended-hours row(s) '
+                     f'when pre-filling')
+        for _, row in df.tail(n_bars).iterrows():
+            dq.append(row[FEATURE_COLS].values.astype(np.float32))
+        log.info(f'  Pre-filled {n_bars}-bar window with {len(dq)} rows')
+    except Exception as exc:
+        log.warning(f'  Could not pre-fill window: {exc}')
     return dq
 
 
@@ -814,12 +768,11 @@ def run_live(ticker: str, threshold: float, dry_run: bool,
     if not models:
         raise SystemExit('No models loaded. Run the pipeline first.')
 
-    # Init CSVs
-    _init_spy_csv()
-    _init_wedge_csv()
+    # Open the database (auto-migrates the legacy CSVs on first run)
+    con = _open_db(dry_run)
 
     # Pre-fill rolling windows from existing data
-    log.info('Pre-filling rolling windows from existing CSV data ...')
+    log.info('Pre-filling rolling windows from stored bar history ...')
     windows = {w: _load_rolling_window(nb, regular_only)
                for w, nb in n_bars_map.items()}
 
@@ -830,8 +783,8 @@ def run_live(ticker: str, threshold: float, dry_run: bool,
     if largest:
         spike_filter.seed(row[3] for row in list(largest)[-10:])
 
-    last_ts = _last_timestamp()
-    log.info(f'Last CSV timestamp: {last_ts or "none (fresh start)"}')
+    last_ts = wedge_db.last_bar_ts(con) if con is not None else None
+    log.info(f'Last stored bar: {last_ts or "none (fresh start)"}')
     log.info(f'Monitoring {ticker}  |  threshold={threshold}  |  '
              f'extended hours from {MARKET_OPEN_H}:00 ET')
     log.info('Scoring: regular session only (9:30-16:00 ET); extended-hours '
@@ -882,15 +835,14 @@ def run_live(ticker: str, threshold: float, dry_run: bool,
             if not spike_filter.check(bar):
                 continue
 
-            # ── Append to price CSV ───────────────────────────────────────────
-            # Every accepted bar is stored, in session or not: the price history
-            # and the daily chart keep full pre/post-market coverage.
-            _append_spy_row(bar, dry_run)
-
             # ── Regular-session gate ──────────────────────────────────────────
-            # Extended-hours bars never reach the windows or the models, so they
-            # also cannot contaminate a later in-session window.
+            # Every accepted bar is stored, in session or not: the bars table
+            # keeps full pre/post-market coverage. But extended-hours bars
+            # never reach the windows or the models, so they also cannot
+            # contaminate a later in-session window.
             if regular_only and not _is_regular_session_bar(bar['timestamp']):
+                if con is not None and not dry_run:
+                    wedge_db.write_bar(con, bar)
                 log.info(f'{bar["timestamp"]}  {ticker}  '
                          f'C={bar["close"]:.2f}  extended hours — stored, not scored')
                 continue
@@ -942,8 +894,10 @@ def run_live(ticker: str, threshold: float, dry_run: bool,
                 f'C={bar["close"]:.2f}  {score_str}' + wedge_note
             )
 
-            _append_wedge_row(bar['timestamp'], scores, threshold, depths,
-                              dry_run, stats=stats)
+            if con is not None and not dry_run:
+                wedge_db.write_minute(con, bar, scores,
+                                      {50: int(sig50), 250: int(sig250)},
+                                      stats, depths)
 
         except KeyboardInterrupt:
             log.info('Stopped by user.')
@@ -962,18 +916,20 @@ def run_live(ticker: str, threshold: float, dry_run: bool,
 def run_replay(ticker: str, threshold: float, dry_run: bool,
                spike_threshold: float = 0.04, regular_only: bool = True) -> None:
     """
-    Replay spy_data_1min.csv through both models as fast as possible.
+    Replay the stored bar history through both models as fast as possible.
     Useful for testing scoring logic without waiting for live data.
-    Writes results to rising_wedge.csv (overwriting it for a clean replay).
-    Applies the same spike filter as live mode, so bad ticks already stored
-    in the CSV (e.g. 2026-07-07 17:07) are skipped during re-scoring, and the
-    same regular-session gate, so a replay reproduces live scoring.
+    Bars come from the database (or the legacy CSV before migration); a
+    non-dry-run replay CLEARS the scores and signals tables first and
+    rewrites them, leaving the bars table untouched. Applies the same spike
+    filter as live mode, so bad ticks already stored (e.g. 2026-07-07 17:07)
+    are skipped during re-scoring, and the same regular-session gate, so a
+    replay reproduces live scoring.
     """
-    if not SPY_CSV.exists():
-        raise SystemExit(f'{SPY_CSV} not found. Nothing to replay.')
+    df = _load_bars_frame()
+    if df.empty:
+        raise SystemExit('No stored bars to replay (no database, no CSV).')
 
-    log.info(f'Replaying {SPY_CSV} ...')
-    df = pd.read_csv(SPY_CSV)
+    log.info(f'Replaying stored bar history ...')
     log.info(f'  {len(df):,} bars  ({df["timestamp"].iloc[0]} to {df["timestamp"].iloc[-1]})')
 
     if regular_only:
@@ -997,10 +953,12 @@ def run_replay(ticker: str, threshold: float, dry_run: bool,
     if not models:
         raise SystemExit('No models loaded.')
 
-    # Reset output CSV. Must be the full WEDGE_COLUMNS header — _append_wedge_row
-    # writes all of them, so a short header silently misaligns the whole file.
+    # Reset model output for a clean replay (bars are kept).
+    con = None
     if not dry_run:
-        pd.DataFrame(columns=WEDGE_COLUMNS).to_csv(WEDGE_CSV, index=False)
+        con = wedge_db.connect(DB_PATH)
+        wedge_db.clear_scores(con)
+        log.info('  Cleared scores and signals tables for a clean replay.')
 
     windows = {w: deque(maxlen=nb) for w, nb in n_bars_map.items()}
     signals = 0
@@ -1031,13 +989,20 @@ def run_replay(ticker: str, threshold: float, dry_run: bool,
                      f'50bar={scores.get(50, "n/a")}  '
                      f'250bar={scores.get(250, "n/a")}')
 
-        _append_wedge_row(row['timestamp'], scores, threshold, depths, dry_run,
-                          stats=stats)
+        if con is not None:
+            bar = {'timestamp': row['timestamp'],
+                   **{c: float(row[c]) for c in FEATURE_COLS}}
+            wedge_db.write_minute(con, bar, scores,
+                                  {50: int(sig50), 250: int(sig250)},
+                                  stats, depths)
+
+    if con is not None:
+        con.close()
 
     # Say what actually happened: under --dry-run nothing was written, and
-    # claiming otherwise reads as if the live scores file had been overwritten.
+    # claiming otherwise reads as if the live scores had been overwritten.
     destination = ('nothing written (--dry-run)' if dry_run
-                   else f'written to {WEDGE_CSV}')
+                   else f'written to {DB_PATH.name}')
     log.info(f'Replay complete. {signals} signal bar(s); {destination}  '
              f'({skipped} bar(s) rejected by spike filter)')
 
@@ -1057,7 +1022,8 @@ def main() -> None:
                              'per the v2 held-out family analysis; at 0.5 the '
                              'v2 models fire on ordinary channels)')
     parser.add_argument('--replay',    action='store_true',
-                        help='Replay spy_data_1min.csv instead of live polling')
+                        help='Re-score the stored bar history instead of '
+                             'live polling')
     parser.add_argument('--dry-run',   action='store_true',
                         help='Print output without writing to CSV files')
     parser.add_argument('--spike-threshold', type=float, default=4.0,

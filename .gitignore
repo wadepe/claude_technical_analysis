@@ -63,3 +63,17 @@ add_btc_negatives.log
 
 # Large local SPY minute-bar archives (backtest data, never committed)
 spy_1min_*.csv
+
+# Live SQLite database (server-local; served by wedge-api, never committed)
+wedge.db
+wedge.db-wal
+wedge.db-shm
+
+# Legacy CSV outputs, superseded by wedge.db (2026-07-30). Still readable as
+# the one-time migration source; untracked with `git rm --cached` once the
+# database is verified on the server. The chart is now generated for local
+# review only and no longer pushed.
+spy_data_1min.csv
+rising_wedge.csv
+rising_wedge_v1.csv
+rising_wedge_chart.png
