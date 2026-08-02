@@ -165,6 +165,32 @@ PROJ_TRAVEL_COEF   = -0.146
 APEX_GATE_MAX_MIN = 360
 
 
+# ── Formation registry ────────────────────────────────────────────────────────
+# Every formation scored each minute. Adding one is an entry here plus its
+# weights on disk — the loop, the writer and the database schema all treat
+# `pattern` as data.
+#
+#   windows    window sizes with trained weights for this formation
+#   run_dir    <project root>/<run_dir>/window_<N>bar/models/cnn_best.weights.h5
+#   threshold  default score threshold (overridable per formation on the CLI)
+#   apex_gate  require converging lines with a near apex before signalling
+#
+# Channels deliberately have NO apex gate: their lines are parallel by
+# definition, so an apex test would reject nearly all of them. The wedge gate
+# stays because it was validated on the 2008-2021 backtest.
+#
+# Channel threshold is 0.9 rather than the wedge's 0.8: the held-out family
+# analysis put precision at 0.983 / recall 0.919 there versus 0.969 / 0.945 at
+# 0.8, and the 2008-2021 scan showed the channel model is already 13x more
+# selective than the wedge model, so the recall cost is cheap.
+FORMATIONS = {
+    'wedge':   {'windows': (50, 250), 'run_dir': 'runs',
+                'threshold': 0.8, 'apex_gate': True},
+    'channel': {'windows': (250,),    'run_dir': 'runs_channel',
+                'threshold': 0.9, 'apex_gate': False},
+}
+
+
 # =============================================================================
 # Timezone helper
 # =============================================================================
@@ -227,21 +253,28 @@ def _write_crash_entry(exc: BaseException, context: str = '') -> None:
 # Model loading (both window sizes in one process)
 # =============================================================================
 
-def _load_model(window: int):
-    """Build + load weights for a given window size. Returns (model, n_bars)."""
+def _load_model(window: int, pattern: str = 'wedge'):
+    """
+    Build + load weights for one (formation, window size).
+    Returns (model, n_bars); (None, window) if the weights are absent, so a
+    formation without trained weights is skipped rather than fatal.
+    """
     os.environ['WEDGE_TOTAL_BARS'] = str(window)
     for mod in list(sys.modules.keys()):
         if mod == 'cnn_model':
             del sys.modules[mod]
     from cnn_model import build_model, N_BARS
 
+    run_dir = FORMATIONS[pattern]['run_dir']
     candidates = [
-        PROJECT_ROOT / 'runs' / f'window_{window}bar' / 'models' / 'cnn_best.weights.h5',
-        PROJECT_ROOT / 'models' / 'cnn_best.weights.h5',
+        PROJECT_ROOT / run_dir / f'window_{window}bar' / 'models' / 'cnn_best.weights.h5',
     ]
+    if pattern == 'wedge':          # legacy single-model fallback
+        candidates.append(PROJECT_ROOT / 'models' / 'cnn_best.weights.h5')
     wp = next((p for p in candidates if p.exists()), None)
     if wp is None:
-        log.warning(f'No weights found for window={window} — skipping this model.')
+        log.warning(f'No weights for {pattern}@{window} '
+                    f'(looked in {run_dir}/) — skipping this model.')
         return None, window
 
     model = build_model(print_summary=False)
@@ -251,7 +284,7 @@ def _load_model(window: int):
     dummy = np.zeros((1, N_BARS, 5), dtype=np.float32)
     model.predict(dummy, verbose=0)
 
-    log.info(f'Loaded {window}-bar model  [{wp.name}]')
+    log.info(f'Loaded {pattern}@{window}-bar model  [{run_dir}/...]')
     return model, N_BARS
 
 
@@ -678,7 +711,7 @@ _ZERO_STATS = {'proj_move_usd': 0.0, 'slope_upper': 0.0, 'slope_lower': 0.0,
 
 
 def _wedge_stats(window_deque: deque, score: Optional[float],
-                 threshold: float) -> dict:
+                 threshold: float, pattern: str = 'wedge') -> dict:
     """
     Fit trendlines on the raw window and derive the reported stats for a bar
     whose score clears the threshold. Below-threshold (or unavailable) bars
@@ -706,20 +739,33 @@ def _wedge_stats(window_deque: deque, score: Optional[float],
 
     close      = float(arr[-1, 3])
     travel_mid = (g['travel_upper'] + g['travel_lower']) / 2.0
-    proj_pct   = max(PROJ_INTERCEPT_PCT + PROJ_TRAVEL_COEF * travel_mid, 0.0)
 
-    # Apex: crossing of upper/lower lines in raw price space.
-    apex_min, apex_price, gate_ok = 0, 0.0, False
+    # Projected move: the PROJ_* fit was estimated on WEDGE events only
+    # (2008-2021 slope study). Applying it to another formation would invent
+    # a number, so anything else reports NULL until it has its own fit.
+    if pattern == 'wedge':
+        proj_pct  = max(PROJ_INTERCEPT_PCT + PROJ_TRAVEL_COEF * travel_mid, 0.0)
+        proj_move = round(close * proj_pct / 100.0, 4)
+    else:
+        proj_move = None
+
+    # Apex: crossing of upper/lower lines in raw price space. Still computed
+    # for every formation (it is informative when a fit happens to converge),
+    # but only gates when the formation asks for it — a channel's lines are
+    # parallel by definition, so an apex test would reject nearly all of them.
+    apex_min, apex_price, converging = 0, 0.0, False
     db = g['b_upper'] - g['b_lower']
     if db < -1e-12:                                     # converging lines
         x_cross = (g['a_lower'] - g['a_upper']) / db    # bars from window start
         ahead   = x_cross - (n - 1)                     # bars past current bar
         apex_min   = int(round(ahead))                  # 1 bar = 1 minute
         apex_price = float(g['a_upper'] + g['b_upper'] * x_cross)
-        gate_ok    = ahead <= APEX_GATE_MAX_MIN         # near or already pinched
+        converging = ahead <= APEX_GATE_MAX_MIN         # near or already pinched
+
+    gate_ok = converging if FORMATIONS[pattern]['apex_gate'] else True
 
     return {
-        'proj_move_usd': round(close * proj_pct / 100.0, 4),
+        'proj_move_usd': proj_move,
         'slope_upper':   round(g['b_upper'], 6),        # $ per bar
         'slope_lower':   round(g['b_lower'], 6),
         'apex_min':      apex_min,
@@ -752,29 +798,40 @@ def _score_window(model, window_deque: deque, n_bars: int) -> Optional[float]:
 # =============================================================================
 
 def run_live(ticker: str, threshold: float, dry_run: bool,
-             spike_threshold: float = 0.04, regular_only: bool = True) -> None:
-    """Main monitoring loop — runs until keyboard interrupt."""
+             spike_threshold: float = 0.04, regular_only: bool = True,
+             thresholds: Optional[dict] = None) -> None:
+    """
+    Main monitoring loop — runs until keyboard interrupt.
 
-    # Load models
+    thresholds: per-formation score thresholds. Defaults to each formation's
+    registry value; `threshold` overrides every formation (kept so the old
+    single --threshold flag still means something).
+    """
+    thresholds = thresholds or {p: threshold for p in FORMATIONS}
+
+    # Load every formation's models, keyed by (pattern, window)
     log.info('Loading models ...')
-    models   = {}
-    n_bars_map = {}
-    for w in (50, 250):
-        m, nb = _load_model(w)
-        if m is not None:
-            models[w]    = m
-            n_bars_map[w] = nb
+    models, n_bars_map = {}, {}
+    for pattern, cfg in FORMATIONS.items():
+        for w in cfg['windows']:
+            m, nb = _load_model(w, pattern)
+            if m is not None:
+                models[(pattern, w)]     = m
+                n_bars_map[(pattern, w)] = nb
 
     if not models:
         raise SystemExit('No models loaded. Run the pipeline first.')
+
+    # One rolling window per DISTINCT window size, shared across formations —
+    # the bars are identical, only the models differ.
+    window_sizes = sorted({w for _, w in models})
 
     # Open the database (auto-migrates the legacy CSVs on first run)
     con = _open_db(dry_run)
 
     # Pre-fill rolling windows from existing data
     log.info('Pre-filling rolling windows from stored bar history ...')
-    windows = {w: _load_rolling_window(nb, regular_only)
-               for w, nb in n_bars_map.items()}
+    windows = {w: _load_rolling_window(w, regular_only) for w in window_sizes}
 
     # Seed the spike filter's reference from the freshest pre-filled window
     # (row layout is [open, high, low, close, volume] — close is index 3)
@@ -785,8 +842,11 @@ def run_live(ticker: str, threshold: float, dry_run: bool,
 
     last_ts = wedge_db.last_bar_ts(con) if con is not None else None
     log.info(f'Last stored bar: {last_ts or "none (fresh start)"}')
-    log.info(f'Monitoring {ticker}  |  threshold={threshold}  |  '
-             f'extended hours from {MARKET_OPEN_H}:00 ET')
+    log.info(f'Monitoring {ticker}  |  extended hours from {MARKET_OPEN_H}:00 ET')
+    log.info('Formations: ' + ',  '.join(
+        f'{p}@{list(FORMATIONS[p]["windows"])} thr={thresholds[p]}'
+        f'{" +apex-gate" if FORMATIONS[p]["apex_gate"] else ""}'
+        for p in sorted(FORMATIONS)))
     log.info('Scoring: regular session only (9:30-16:00 ET); extended-hours '
              'bars are logged to the price CSV but not scored.'
              if regular_only else
@@ -854,50 +914,48 @@ def run_live(ticker: str, threshold: float, dry_run: bool,
             for dq in windows.values():
                 dq.append(bar_arr)
 
-            # ── Score each window ─────────────────────────────────────────────
-            scores, stats = {}, {}
-            for w, model in models.items():
-                scores[w] = _score_window(model, windows[w], n_bars_map[w])
-                stats[w]  = _wedge_stats(windows[w], scores[w], threshold)
-
-            depths = {w: len(windows[w]) for w in windows}
+            # ── Score every formation on every one of its windows ─────────────
+            scores, stats, sigs, depths = {}, {}, {}, {}
+            for key, model in models.items():
+                pattern, w = key
+                thr = thresholds[pattern]
+                sc  = _score_window(model, windows[w], n_bars_map[key])
+                st  = _wedge_stats(windows[w], sc, thr, pattern)
+                scores[key] = sc
+                stats[key]  = st
+                sigs[key]   = int(sc is not None and sc >= thr
+                                  and st.get('gate_ok', False))
+                depths[key] = len(windows[w])
 
             # ── Log + write ───────────────────────────────────────────────────
-            s50  = scores.get(50)
-            s250 = scores.get(250)
-            sig50  = (s50  is not None and s50  >= threshold
-                      and stats.get(50,  {}).get('gate_ok', False))
-            sig250 = (s250 is not None and s250 >= threshold
-                      and stats.get(250, {}).get('gate_ok', False))
-
-            score_str = (
-                f'50bar={s50:.4f}{"*" if sig50 else " "}' if s50 is not None
-                else '50bar=n/a '
-            ) + '  ' + (
-                f'250bar={s250:.4f}{"*" if sig250 else " "}' if s250 is not None
-                else '250bar=n/a '
+            score_str = '  '.join(
+                (f'{p}@{w}={scores[(p, w)]:.4f}'
+                 f'{"*" if sigs[(p, w)] else " "}')
+                if scores[(p, w)] is not None else f'{p}@{w}=n/a '
+                for (p, w) in sorted(models)
             )
 
-            wedge_note = ''
-            if sig50 or sig250:
-                st = stats[250] if sig250 else stats[50]
-                wedge_note = (
-                    f'  <<< WEDGE SIGNAL  proj_move=${st["proj_move_usd"]:.2f}'
-                    + (f'  apex in {st["apex_min"]}m @ ${st["apex_price"]:.2f}'
-                       if st['apex_min'] else '')
-                    + ' >>>'
-                )
+            fired = [k for k in sorted(models) if sigs[k]]
+            note = ''
+            if fired:
+                parts = []
+                for pattern, w in fired:
+                    st = stats[(pattern, w)]
+                    bits = [f'slope={st["mid_travel"]:+.3f}']
+                    if st['proj_move_usd'] is not None:
+                        bits.append(f'proj_move=${st["proj_move_usd"]:.2f}')
+                    if st['apex_min']:
+                        bits.append(f'apex {st["apex_min"]}m '
+                                    f'@ ${st["apex_price"]:.2f}')
+                    parts.append(f'{pattern}@{w} ' + ' '.join(bits))
+                note = '  <<< ' + ' | '.join(parts) + ' >>>'
 
-            level = logging.WARNING if (sig50 or sig250) else logging.INFO
-            log.log(level,
-                f'{bar["timestamp"]}  {ticker}  '
-                f'C={bar["close"]:.2f}  {score_str}' + wedge_note
-            )
+            log.log(logging.WARNING if fired else logging.INFO,
+                    f'{bar["timestamp"]}  {ticker}  '
+                    f'C={bar["close"]:.2f}  {score_str}' + note)
 
             if con is not None and not dry_run:
-                wedge_db.write_minute(con, bar, scores,
-                                      {50: int(sig50), 250: int(sig250)},
-                                      stats, depths)
+                wedge_db.write_minute(con, bar, scores, sigs, stats, depths)
 
         except KeyboardInterrupt:
             log.info('Stopped by user.')
@@ -914,7 +972,8 @@ def run_live(ticker: str, threshold: float, dry_run: bool,
 # =============================================================================
 
 def run_replay(ticker: str, threshold: float, dry_run: bool,
-               spike_threshold: float = 0.04, regular_only: bool = True) -> None:
+               spike_threshold: float = 0.04, regular_only: bool = True,
+               thresholds: Optional[dict] = None) -> None:
     """
     Replay the stored bar history through both models as fast as possible.
     Useful for testing scoring logic without waiting for live data.
@@ -925,6 +984,8 @@ def run_replay(ticker: str, threshold: float, dry_run: bool,
     are skipped during re-scoring, and the same regular-session gate, so a
     replay reproduces live scoring.
     """
+    thresholds = thresholds or {p: threshold for p in FORMATIONS}
+
     df = _load_bars_frame()
     if df.empty:
         raise SystemExit('No stored bars to replay (no database, no CSV).')
@@ -941,14 +1002,14 @@ def run_replay(ticker: str, threshold: float, dry_run: bool,
         if df.empty:
             raise SystemExit('No regular-session bars to replay.')
 
-    # Load models
-    models     = {}
-    n_bars_map = {}
-    for w in (50, 250):
-        m, nb = _load_model(w)
-        if m is not None:
-            models[w]    = m
-            n_bars_map[w] = nb
+    # Load every formation's models, keyed by (pattern, window)
+    models, n_bars_map = {}, {}
+    for pattern, cfg in FORMATIONS.items():
+        for w in cfg['windows']:
+            m, nb = _load_model(w, pattern)
+            if m is not None:
+                models[(pattern, w)]     = m
+                n_bars_map[(pattern, w)] = nb
 
     if not models:
         raise SystemExit('No models loaded.')
@@ -960,7 +1021,8 @@ def run_replay(ticker: str, threshold: float, dry_run: bool,
         wedge_db.clear_scores(con)
         log.info('  Cleared scores and signals tables for a clean replay.')
 
-    windows = {w: deque(maxlen=nb) for w, nb in n_bars_map.items()}
+    window_sizes = sorted({w for _, w in models})
+    windows = {w: deque(maxlen=w) for w in window_sizes}
     signals = 0
     spike_filter = SpikeFilter(threshold=spike_threshold)
     skipped = 0
@@ -973,28 +1035,27 @@ def run_replay(ticker: str, threshold: float, dry_run: bool,
         for dq in windows.values():
             dq.append(bar_arr)
 
-        scores = {w: _score_window(m, windows[w], n_bars_map[w])
-                  for w, m in models.items()}
-        stats  = {w: _wedge_stats(windows[w], scores[w], threshold)
-                  for w in models}
-        depths = {w: len(windows[w]) for w in windows}
+        scores, stats, sigs, depths = {}, {}, {}, {}
+        for key, m in models.items():
+            pattern, w = key
+            thr = thresholds[pattern]
+            sc  = _score_window(m, windows[w], n_bars_map[key])
+            st  = _wedge_stats(windows[w], sc, thr, pattern)
+            scores[key], stats[key] = sc, st
+            sigs[key]   = int(sc is not None and sc >= thr
+                              and st.get('gate_ok', False))
+            depths[key] = len(windows[w])
 
-        sig50  = (scores.get(50)  is not None and scores.get(50)  >= threshold
-                  and stats.get(50,  {}).get('gate_ok', False))
-        sig250 = (scores.get(250) is not None and scores.get(250) >= threshold
-                  and stats.get(250, {}).get('gate_ok', False))
-        if sig50 or sig250:
+        if any(sigs.values()):
             signals += 1
-            log.info(f'SIGNAL  {row["timestamp"]}  '
-                     f'50bar={scores.get(50, "n/a")}  '
-                     f'250bar={scores.get(250, "n/a")}')
+            fired = ' '.join(f'{p}@{w}={scores[(p, w)]:.4f}'
+                             for (p, w) in sorted(models) if sigs[(p, w)])
+            log.info(f'SIGNAL  {row["timestamp"]}  {fired}')
 
         if con is not None:
             bar = {'timestamp': row['timestamp'],
                    **{c: float(row[c]) for c in FEATURE_COLS}}
-            wedge_db.write_minute(con, bar, scores,
-                                  {50: int(sig50), 250: int(sig250)},
-                                  stats, depths)
+            wedge_db.write_minute(con, bar, scores, sigs, stats, depths)
 
     if con is not None:
         con.close()
@@ -1017,10 +1078,16 @@ def main() -> None:
     )
     parser.add_argument('--ticker',    default='SPY',
                         help='Ticker symbol to monitor (default: SPY)')
-    parser.add_argument('--threshold', type=float, default=0.8,
-                        help='Score threshold for a signal (default: 0.8 — '
-                             'per the v2 held-out family analysis; at 0.5 the '
-                             'v2 models fire on ordinary channels)')
+    parser.add_argument('--threshold', type=float, default=None,
+                        help='Override the score threshold for EVERY '
+                             'formation. Omit to use each formation\'s own '
+                             'default: '
+                             + ', '.join(f'{p}={c["threshold"]}'
+                                         for p, c in sorted(FORMATIONS.items())))
+    parser.add_argument('--pattern-threshold', action='append', default=[],
+                        metavar='NAME=VALUE',
+                        help='Override one formation only, repeatable '
+                             '(e.g. --pattern-threshold channel=0.85)')
     parser.add_argument('--replay',    action='store_true',
                         help='Re-score the stored bar history instead of '
                              'live polling')
@@ -1040,14 +1107,28 @@ def main() -> None:
 
     regular_only = not args.score_extended_hours
 
+    # Per-formation thresholds: registry defaults, then --threshold applied to
+    # all, then --pattern-threshold applied to individual formations.
+    thresholds = {p: c['threshold'] for p, c in FORMATIONS.items()}
+    if args.threshold is not None:
+        thresholds = {p: args.threshold for p in thresholds}
+    for spec in args.pattern_threshold:
+        name, _, val = spec.partition('=')
+        if name not in thresholds:
+            raise SystemExit(f'Unknown formation {name!r} in '
+                             f'--pattern-threshold; known: '
+                             f'{", ".join(sorted(thresholds))}')
+        thresholds[name] = float(val)
+
+    fallback = args.threshold if args.threshold is not None else 0.8
     if args.replay:
-        run_replay(args.ticker, args.threshold, args.dry_run,
+        run_replay(args.ticker, fallback, args.dry_run,
                    spike_threshold=args.spike_threshold / 100.0,
-                   regular_only=regular_only)
+                   regular_only=regular_only, thresholds=thresholds)
     else:
-        run_live(args.ticker, args.threshold, args.dry_run,
+        run_live(args.ticker, fallback, args.dry_run,
                  spike_threshold=args.spike_threshold / 100.0,
-                 regular_only=regular_only)
+                 regular_only=regular_only, thresholds=thresholds)
 
 
 def _excepthook(exc_type, exc_value, exc_tb) -> None:

@@ -83,9 +83,12 @@ def load_from_db(db_path: Path) -> pd.DataFrame:
         spy = pd.read_sql_query(
             'SELECT ts AS timestamp, open, high, low, close, volume '
             'FROM bars ORDER BY ts', con, parse_dates=['timestamp'])
+        # The chart is the wedge end-of-day review; channel output lives in
+        # the database and the API. Filtering here keeps the pivot below
+        # one-column-per-window as before.
         sc = pd.read_sql_query(
-            'SELECT ts AS timestamp, window, score, signal FROM scores', con,
-            parse_dates=['timestamp'])
+            "SELECT ts AS timestamp, window, score, signal FROM scores "
+            "WHERE pattern = 'wedge'", con, parse_dates=['timestamp'])
     finally:
         con.close()
     if spy.empty:

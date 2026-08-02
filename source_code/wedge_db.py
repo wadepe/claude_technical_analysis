@@ -13,19 +13,29 @@ Schema
       Every accepted bar, extended hours included — full price history,
       same coverage the price CSV had.
 
-  scores(ts, window, score, signal, bars)     PK (ts, window)
-      One row per scored bar per window size (50 / 250). Only
-      regular-session bars are scored (see live_monitor's session gate), so
-      extended-hours bars have a bars row and no scores rows. score is NULL
-      while the rolling window is still filling. `window` is data, not a
-      column name — a third window size is new rows, not a schema change
-      (the CSV's score_50bar/score_250bar columns were why the v1->v2
-      schema change forced an archive-and-restart).
+  scores(ts, pattern, window, score, signal, bars)  PK (ts, pattern, window)
+      One row per scored bar per (formation, window size): currently
+      wedge@50, wedge@250, channel@250. Only regular-session bars are
+      scored (see live_monitor's session gate), so extended-hours bars have
+      a bars row and no scores rows. score is NULL while the rolling window
+      is still filling.
 
-  signals(ts, window, proj_move_usd, slope_upper, slope_lower,
-          apex_min, apex_price, mid_travel)   PK (ts, window)
-      Wedge geometry, present ONLY where signal=1 — replaces the CSV
+      Both `pattern` and `window` are DATA, not column names. Adding a
+      formation or a window size is new rows, not a schema change — the
+      CSV's score_50bar/score_250bar columns are exactly why the v1->v2
+      change forced an archive-and-restart.
+
+  signals(ts, pattern, window, proj_move_usd, slope_upper, slope_lower,
+          apex_min, apex_price, mid_travel)   PK (ts, pattern, window)
+      Fitted geometry, present ONLY where signal=1 — replaces the CSV
       convention of zero-filled stat columns on every non-signal row.
+
+      mid_travel is the formation's SLOPE (midline tilt across the window
+      as a fraction of its price range): the wedge's rise/fall, and the
+      channel's slope. proj_move_usd is NULL for channels — the PROJ_*
+      fit in live_monitor was estimated on wedge events only, and applying
+      it to channels would invent a number. apex_* stay 0 for parallel
+      fits, which is most channels.
 
 Timestamps are TEXT 'YYYY-MM-DD HH:MM:SS', naive America/New_York — exactly
 the strings the CSVs used. ISO text sorts chronologically, so BETWEEN range
@@ -55,6 +65,8 @@ DB_PATH      = PROJECT_ROOT / 'wedge.db'
 STAT_KEYS = ['proj_move_usd', 'slope_upper', 'slope_lower',
              'apex_min', 'apex_price', 'mid_travel']
 
+DEFAULT_PATTERN = 'wedge'      # what pre-migration rows are attributed to
+
 _SCHEMA = f"""
 CREATE TABLE IF NOT EXISTS bars (
     ts     TEXT PRIMARY KEY,
@@ -62,21 +74,66 @@ CREATE TABLE IF NOT EXISTS bars (
 ) WITHOUT ROWID;
 
 CREATE TABLE IF NOT EXISTS scores (
-    ts     TEXT    NOT NULL,
-    window INTEGER NOT NULL,
-    score  REAL,
-    signal INTEGER NOT NULL DEFAULT 0,
-    bars   INTEGER,
-    PRIMARY KEY (ts, window)
+    ts      TEXT    NOT NULL,
+    pattern TEXT    NOT NULL,
+    window  INTEGER NOT NULL,
+    score   REAL,
+    signal  INTEGER NOT NULL DEFAULT 0,
+    bars    INTEGER,
+    PRIMARY KEY (ts, pattern, window)
 ) WITHOUT ROWID;
 
 CREATE TABLE IF NOT EXISTS signals (
-    ts     TEXT    NOT NULL,
-    window INTEGER NOT NULL,
+    ts      TEXT    NOT NULL,
+    pattern TEXT    NOT NULL,
+    window  INTEGER NOT NULL,
     {', '.join(f'{k} REAL' for k in STAT_KEYS)},
-    PRIMARY KEY (ts, window)
+    PRIMARY KEY (ts, pattern, window)
 ) WITHOUT ROWID;
 """
+
+
+def _needs_pattern_migration(con: sqlite3.Connection) -> bool:
+    """True if scores/signals exist but predate the `pattern` column."""
+    for table in ('scores', 'signals'):
+        row = con.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
+            (table,)).fetchone()
+        if row is None:
+            continue
+        cols = [r[1] for r in con.execute(f'PRAGMA table_info({table})')]
+        if 'pattern' not in cols:
+            return True
+    return False
+
+
+def _migrate_add_pattern(con: sqlite3.Connection) -> None:
+    """
+    Rebuild scores/signals with `pattern` in the primary key.
+
+    SQLite cannot ALTER a PRIMARY KEY, so the tables are recreated and
+    copied. Existing rows are all wedge output (the only model that ran
+    before this change), so they are attributed to DEFAULT_PATTERN. Runs in
+    one transaction: either the whole rebuild lands or none of it does.
+    """
+    with con:
+        for table, extra in (('scores', 'score, signal, bars'),
+                             ('signals', ', '.join(STAT_KEYS))):
+            row = con.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
+                (table,)).fetchone()
+            if row is None:
+                continue
+            cols = [r[1] for r in con.execute(f'PRAGMA table_info({table})')]
+            if 'pattern' in cols:
+                continue
+            con.execute(f'ALTER TABLE {table} RENAME TO {table}_old')
+            con.executescript(_SCHEMA)
+            con.execute(
+                f'INSERT INTO {table} (ts, pattern, window, {extra}) '
+                f'SELECT ts, ?, window, {extra} FROM {table}_old',
+                (DEFAULT_PATTERN,))
+            con.execute(f'DROP TABLE {table}_old')
 
 
 def connect(path: Path | str = DB_PATH, readonly: bool = False
@@ -91,6 +148,8 @@ def connect(path: Path | str = DB_PATH, readonly: bool = False
         con = sqlite3.connect(str(path))
         con.execute('PRAGMA journal_mode=WAL')
         con.execute('PRAGMA synchronous=NORMAL')
+        if _needs_pattern_migration(con):
+            _migrate_add_pattern(con)
         con.executescript(_SCHEMA)
     con.row_factory = sqlite3.Row
     return con
@@ -112,22 +171,27 @@ def write_minute(con: sqlite3.Connection, bar: dict, scores: dict,
                  sigs: dict, stats: dict, depths: dict) -> None:
     """
     Store one fully-scored minute atomically: the bar, a scores row per
-    window, and a signals row for each window whose signal fired.
+    (pattern, window), and a signals row for each that fired.
+
+    scores/sigs/stats/depths are keyed by the (pattern, window) tuple, so
+    adding a formation needs no change here.
     """
     ts = bar['timestamp']
     with con:
         con.execute('INSERT OR REPLACE INTO bars VALUES (?,?,?,?,?,?)',
                     (ts, bar['open'], bar['high'], bar['low'],
                      bar['close'], bar['volume']))
-        for w, score in scores.items():
-            con.execute('INSERT OR REPLACE INTO scores VALUES (?,?,?,?,?)',
-                        (ts, w, score, sigs.get(w, 0), depths.get(w, 0)))
-            if sigs.get(w):
-                st = stats[w]
+        for key, score in scores.items():
+            pattern, w = key
+            con.execute('INSERT OR REPLACE INTO scores VALUES (?,?,?,?,?,?)',
+                        (ts, pattern, w, score, sigs.get(key, 0),
+                         depths.get(key, 0)))
+            if sigs.get(key):
+                st = stats[key]
                 con.execute(
                     f'INSERT OR REPLACE INTO signals VALUES '
-                    f'({",".join("?" * (2 + len(STAT_KEYS)))})',
-                    tuple([ts, w] + [st[k] for k in STAT_KEYS]))
+                    f'({",".join("?" * (3 + len(STAT_KEYS)))})',
+                    tuple([ts, pattern, w] + [st.get(k) for k in STAT_KEYS]))
 
 
 def clear_scores(con: sqlite3.Connection) -> None:
@@ -172,6 +236,7 @@ def migrate_csvs(con: sqlite3.Connection,
     import pandas as pd
 
     counts = {'bars': 0, 'scores': 0, 'signals': 0}
+    P = DEFAULT_PATTERN          # the CSVs only ever held wedge output
 
     if spy_csv.exists():
         spy = pd.read_csv(spy_csv)
@@ -193,18 +258,18 @@ def migrate_csvs(con: sqlite3.Connection,
                 score = r[f'score_{w}bar']
                 score = None if pd.isna(score) else float(score)
                 sig   = int(r[f'signal_{w}bar']) if pd.notna(r[f'signal_{w}bar']) else 0
-                srows.append((r['timestamp'], w, score, sig,
+                srows.append((r['timestamp'], P, w, score, sig,
                               int(r[f'bars_{w}'])))
                 if sig:
                     grows.append(tuple(
-                        [r['timestamp'], w]
+                        [r['timestamp'], P, w]
                         + [float(r[f'{k}_{w}bar']) for k in STAT_KEYS]))
         with con:
-            con.executemany('INSERT OR REPLACE INTO scores VALUES (?,?,?,?,?)',
-                            srows)
+            con.executemany(
+                'INSERT OR REPLACE INTO scores VALUES (?,?,?,?,?,?)', srows)
             con.executemany(
                 f'INSERT OR REPLACE INTO signals VALUES '
-                f'({",".join("?" * (2 + len(STAT_KEYS)))})', grows)
+                f'({",".join("?" * (3 + len(STAT_KEYS)))})', grows)
         counts['scores']  = len(srows)
         counts['signals'] = len(grows)
 
@@ -218,6 +283,16 @@ def stats(con: sqlite3.Connection) -> str:
                         f'FROM {table}').fetchone()
         lines.append(f'  {table:8s} {r["n"]:>9,} rows'
                      + (f'   {r["lo"]}  ->  {r["hi"]}' if r['n'] else ''))
+        if table in ('scores', 'signals') and r['n']:
+            sig_col = 'sum(signal)' if table == 'scores' else 'NULL'
+            for br in con.execute(
+                    f'SELECT pattern, window, count(*) AS n, '
+                    f'{sig_col} AS sig FROM {table} '
+                    f'GROUP BY pattern, window ORDER BY pattern, window'):
+                extra = ('' if br['sig'] is None
+                         else f'   signals {br["sig"]:,}')
+                lines.append(f'    {br["pattern"]:<8} @{br["window"]:<4} '
+                             f'{br["n"]:>9,}{extra}')
     return '\n'.join(lines)
 
 

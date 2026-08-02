@@ -13,9 +13,13 @@ Endpoints (all GET, all JSON)
 -----------------------------
   /health                  {ok, db, bars, scores, signals, last_bar}
   /bars     ?since=&until=&limit=     price bars, ascending
-  /scores   ?since=&until=&limit=&window=   model scores, ascending
-  /signals  ?since=&until=&limit=&window=   signal geometry rows, ascending
-  /latest                  last bar + the most recent scores row per window
+  /scores   ?since=&until=&limit=&window=&pattern=   scores, ascending
+  /signals  ?since=&until=&limit=&window=&pattern=   geometry, ascending
+  /latest                  last bar + newest scores row per (pattern, window)
+
+  pattern: 'wedge' or 'channel'. Omit for all formations. In `signals`,
+  mid_travel is the formation's slope and proj_move_usd is null for
+  channels (its fit was estimated on wedges only).
 
   since/until: 'YYYY-MM-DD' or 'YYYY-MM-DD HH:MM:SS' (ET, inclusive /
   exclusive). limit: rows, default 2000, max 25000 — enough for a full
@@ -59,9 +63,9 @@ DEFAULT_LIMIT = 2_000
 
 _TABLES = {
     'bars':    'SELECT ts, open, high, low, close, volume FROM bars',
-    'scores':  'SELECT ts, window, score, signal, bars FROM scores',
-    'signals': 'SELECT ts, window, proj_move_usd, slope_upper, slope_lower, '
-               'apex_min, apex_price, mid_travel FROM signals',
+    'scores':  'SELECT ts, pattern, window, score, signal, bars FROM scores',
+    'signals': 'SELECT ts, pattern, window, proj_move_usd, slope_upper, '
+               'slope_lower, apex_min, apex_price, mid_travel FROM signals',
 }
 
 
@@ -106,6 +110,9 @@ class Handler(BaseHTTPRequestHandler):
         if 'window' in qs:
             where.append('window = ?')
             params.append(int(qs['window'][0]))
+        if 'pattern' in qs:
+            where.append('pattern = ?')
+            params.append(qs['pattern'][0])
         limit = min(int(qs.get('limit', [DEFAULT_LIMIT])[0]), MAX_LIMIT)
         return (' WHERE ' + ' AND '.join(where) if where else ''), params, limit
 
@@ -149,10 +156,10 @@ class Handler(BaseHTTPRequestHandler):
                          'last_bar': last})
 
     def _table(self, table: str, qs: dict) -> None:
-        # window filter is meaningless for bars — reject early so a typo'd
-        # query fails loudly instead of silently returning everything.
-        if table == 'bars' and 'window' in qs:
-            raise ValueError('bars has no window column')
+        # window/pattern filters are meaningless for bars — reject early so a
+        # typo'd query fails loudly instead of silently returning everything.
+        if table == 'bars' and ({'window', 'pattern'} & set(qs)):
+            raise ValueError('bars has no window or pattern column')
         where, params, limit = self._query_args(qs)
         con = self._connect()
         try:
@@ -171,11 +178,15 @@ class Handler(BaseHTTPRequestHandler):
         try:
             bar = _rows_to_dicts(con.execute(
                 f'{_TABLES["bars"]} ORDER BY ts DESC LIMIT 1'))
+            # newest scores row per (pattern, window)
             scores = _rows_to_dicts(con.execute(
-                f'''SELECT s.* FROM scores s
-                    JOIN (SELECT window, max(ts) AS ts FROM scores
-                          GROUP BY window) m
-                    ON s.window = m.window AND s.ts = m.ts'''))
+                f'''SELECT s.ts, s.pattern, s.window, s.score, s.signal, s.bars
+                    FROM scores s
+                    JOIN (SELECT pattern, window, max(ts) AS ts FROM scores
+                          GROUP BY pattern, window) m
+                    ON s.pattern = m.pattern AND s.window = m.window
+                       AND s.ts = m.ts
+                    ORDER BY s.pattern, s.window'''))
         finally:
             con.close()
         self._send(200, {'bar': bar[0] if bar else None, 'scores': scores})
