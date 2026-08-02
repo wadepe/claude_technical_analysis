@@ -92,7 +92,10 @@ def main() -> None:
         for t in THRESHOLDS:
             rate = float((probs[m] >= t).mean())
             vals.append(f'  {rate:6.3f}')
-        tag = 'recall' if fam == 'forming_wedge' else 'FP-rate'
+        # Which family is the POSITIVE class comes from the manifest labels,
+        # not a hardcoded name — the same corpus machinery now builds channel
+        # corpora, where forming_wedge is a negative and channel is positive.
+        tag = 'recall' if bool(labels[m][0]) else 'FP-rate'
         lines.append(f'  {fam:<15}' + ''.join(vals) + f'   ({tag})')
 
     lines.append(f'\nOverall precision at each threshold:')

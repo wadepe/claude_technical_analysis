@@ -93,6 +93,31 @@ MIN_END_WIDTH            = 0.018          # absolute floor so the apex never pin
 # Visible pattern length as a fraction of the window (all anchored families)
 PATTERN_LEN_FRAC = (0.30, 0.85)
 
+# ── Which family carries label=1 ──────────────────────────────────────────────
+# 'forming_wedge' reproduces the v2 wedge corpus exactly. 'channel' builds the
+# channel-detector corpus, where wedges and megaphones become hard negatives
+# (structure with the wrong width behaviour) -- the mirror image of the wedge
+# corpus, sharing the same exclusion band so no window is ambiguous.
+POSITIVE_FAMILY = os.environ.get('WEDGE_POSITIVE_FAMILY', 'forming_wedge')
+
+# ── Channel touch constraint ──────────────────────────────────────────────────
+# A channel is only identifiable if price actually reaches both boundaries at
+# least twice -- you cannot draw the lines otherwise. _channel_closes alone
+# mean-reverts toward the midline, so touches are emergent and often absent.
+# When channels are the POSITIVE class we schedule touches explicitly and
+# verify them; a sample that still falls short after retries is rejected.
+#
+# Enabled ONLY when channel is the positive family. Turning it on for the wedge
+# corpus would change that corpus's channel NEGATIVES, silently breaking
+# reproducibility of the deployed v2 wedge model, which was trained against the
+# unconstrained ones.
+CHANNEL_TOUCHES_REQUIRED = 2            # per side, minimum
+CHANNEL_TOUCH_COUNT_RNG  = (2, 5)       # scheduled touches per side
+CHANNEL_TOUCH_TOL_FRAC   = 0.18         # within this fraction of channel width
+CHANNEL_TOUCH_MIN_GAP    = 0.06         # min separation, fraction of pattern len
+CHANNEL_TOUCH_PULL       = 0.55         # attraction strength at a scheduled bar
+CHANNEL_TOUCH_RETRIES    = 6
+
 
 # =============================================================================
 # Shared price/candle machinery (adapted from the v1 generator)
@@ -114,10 +139,17 @@ def _garch_step(rng, vol_t: float, base_sigma: float, persist: float,
 def _channel_closes(rng, n: int, lower: np.ndarray, upper: np.ndarray,
                     noise_sigma: float, rev_strength: float, momentum_str: float,
                     vol_persist: float, fat_prob: float, fat_mult: float,
-                    violation_prob: float) -> np.ndarray:
+                    violation_prob: float,
+                    touch_target: np.ndarray = None) -> np.ndarray:
     """
     Simulate closes bouncing inside a channel defined by per-bar lower/upper
     boundary arrays (works for converging, parallel, and diverging channels).
+
+    touch_target: optional per-bar array of +1 (steer toward the upper
+    boundary), -1 (toward the lower) or 0 (free). Where non-zero, the pull
+    toward the midline is replaced by a pull toward that boundary, so the
+    scheduled touches emerge from the same dynamics rather than being stamped
+    on afterwards. None reproduces the original unconstrained behaviour.
     """
     mid    = (lower + upper) / 2.0
     slope  = np.diff(mid, prepend=mid[0])
@@ -129,7 +161,13 @@ def _channel_closes(rng, n: int, lower: np.ndarray, upper: np.ndarray,
         vol_t, step = _garch_step(rng, vol_t, noise_sigma, vol_persist,
                                   fat_prob, fat_mult)
         mom = momentum_str * (closes[i-1] - closes[i-2]) if i >= 2 else 0.0
-        rev = rev_strength * (mid[i-1] - closes[i-1])
+        tgt = 0 if touch_target is None else touch_target[i]
+        if tgt > 0:
+            rev = CHANNEL_TOUCH_PULL * (upper[i-1] - closes[i-1])
+        elif tgt < 0:
+            rev = CHANNEL_TOUCH_PULL * (lower[i-1] - closes[i-1])
+        else:
+            rev = rev_strength * (mid[i-1] - closes[i-1])
         closes[i] = closes[i-1] + slope[i] + rev + mom + step
 
         # Boundary handling: reject back inside, or occasionally poke through
@@ -144,6 +182,78 @@ def _channel_closes(rng, n: int, lower: np.ndarray, upper: np.ndarray,
             else:
                 closes[i] = lower[i] + abs(rng.normal(0, noise_sigma * 0.15))
     return closes
+
+
+def _plan_touches(rng, n: int) -> tuple:
+    """
+    Schedule alternating boundary visits across a pattern of n bars.
+
+    Returns (touch_target, n_up, n_lo): a per-bar steer array for
+    _channel_closes, and how many visits were scheduled per side. Visits
+    alternate sides so the path zig-zags between support and resistance the
+    way a real channel does, are spaced at least CHANNEL_TOUCH_MIN_GAP apart,
+    and each occupies a short run of bars so the approach is gradual.
+    """
+    n_up = int(rng.randint(*CHANNEL_TOUCH_COUNT_RNG))
+    n_lo = int(rng.randint(*CHANNEL_TOUCH_COUNT_RNG))
+    total = n_up + n_lo
+
+    gap = max(int(n * CHANNEL_TOUCH_MIN_GAP), 2)
+    # Evenly spread slots across the pattern, jittered, keeping the gap.
+    span = n - 2 * gap
+    if span <= 0 or total < 2:
+        return None, 0, 0
+    base = np.linspace(gap, n - gap - 1, total)
+    jitter = rng.uniform(-gap * 0.4, gap * 0.4, total)
+    slots = np.clip(np.round(base + jitter), 1, n - 1).astype(int)
+    slots = np.unique(slots)
+
+    # Alternate sides, starting from whichever side has more visits to place.
+    start_up = n_up >= n_lo
+    target = np.zeros(n, dtype=np.int8)
+    used_up = used_lo = 0
+    # Bars spent approaching each boundary. The floor of 3 matters: the pull
+    # closes CHANNEL_TOUCH_PULL of the remaining gap per bar, so from mid-
+    # channel a single bar only reaches 0.225 * width -- outside the 0.18 *
+    # width tolerance. Short patterns would otherwise never register a touch.
+    run = max(int(n * 0.025), 3)
+    for k, s in enumerate(slots):
+        want_up = (k % 2 == 0) == start_up
+        if want_up and used_up < n_up:
+            target[s:s + run] = 1
+            used_up += 1
+        elif not want_up and used_lo < n_lo:
+            target[s:s + run] = -1
+            used_lo += 1
+        elif used_up < n_up:
+            target[s:s + run] = 1
+            used_up += 1
+        elif used_lo < n_lo:
+            target[s:s + run] = -1
+            used_lo += 1
+    return target[:n], used_up, used_lo
+
+
+def _count_touches(closes: np.ndarray, lower: np.ndarray, upper: np.ndarray
+                   ) -> tuple:
+    """
+    Count distinct visits to each boundary.
+
+    A visit is a maximal run of bars within CHANNEL_TOUCH_TOL_FRAC of the
+    channel width of that boundary; consecutive bars spent hugging a line
+    count once, so a single long drift along support is not mistaken for
+    several separate touches.
+    """
+    width = np.maximum(upper - lower, 1e-9)
+    tol   = width * CHANNEL_TOUCH_TOL_FRAC
+    near_up = closes >= upper - tol
+    near_lo = closes <= lower + tol
+
+    def runs(mask):
+        return int(np.sum(mask.astype(np.int8) -
+                          np.concatenate([[0], mask.astype(np.int8)[:-1]]) == 1))
+
+    return runs(near_up), runs(near_lo)
 
 
 def _fat_walk(rng, n: int, sigma: float, fat_prob: float, fat_mult: float
@@ -321,11 +431,36 @@ def _anchored_pattern(dataset_idx: int, family: str) -> tuple[pd.DataFrame, dict
     lower  = mids - widths / 2.0
     upper  = mids + widths / 2.0
 
-    closes_pat = _channel_closes(
-        rng, n_vis, lower, upper, p['noise_sigma'], p['rev_strength'],
-        p['momentum_str'], p['vol_persist'], p['fat_prob'], p['fat_mult'],
-        p['violation_prob'],
-    )
+    # Channel positives must visibly touch both boundaries at least twice, or
+    # the lines are not drawable (see CHANNEL_TOUCHES_REQUIRED). Retry with a
+    # fresh touch schedule; keep the best attempt if none fully satisfies.
+    enforce = (family == 'channel' and POSITIVE_FAMILY == 'channel')
+    n_touch_up = n_touch_lo = None
+    if not enforce:
+        closes_pat = _channel_closes(
+            rng, n_vis, lower, upper, p['noise_sigma'], p['rev_strength'],
+            p['momentum_str'], p['vol_persist'], p['fat_prob'], p['fat_mult'],
+            p['violation_prob'],
+        )
+    else:
+        best, best_score = None, -1
+        for _ in range(CHANNEL_TOUCH_RETRIES):
+            target, _, _ = _plan_touches(rng, n_vis)
+            cand = _channel_closes(
+                rng, n_vis, lower, upper, p['noise_sigma'], p['rev_strength'],
+                p['momentum_str'], p['vol_persist'], p['fat_prob'],
+                p['fat_mult'], p['violation_prob'], touch_target=target,
+            )
+            t_up, t_lo = _count_touches(cand, lower, upper)
+            if t_up >= CHANNEL_TOUCHES_REQUIRED and t_lo >= CHANNEL_TOUCHES_REQUIRED:
+                closes_pat, n_touch_up, n_touch_lo = cand, t_up, t_lo
+                break
+            score = min(t_up, CHANNEL_TOUCHES_REQUIRED) + \
+                    min(t_lo, CHANNEL_TOUCHES_REQUIRED)
+            if score > best_score:
+                best, best_score = (cand, t_up, t_lo), score
+        else:
+            closes_pat, n_touch_up, n_touch_lo = best
 
     pre = _bridge_prepad(rng, pre_pad, closes_pat[0],
                          p['noise_sigma'] * rng.uniform(0.70, 1.20),
@@ -344,7 +479,7 @@ def _anchored_pattern(dataset_idx: int, family: str) -> tuple[pd.DataFrame, dict
     segment = np.zeros(TOTAL_BARS, dtype=np.int8)
     segment[pre_pad:] = 1
 
-    label = 1 if family == 'forming_wedge' else 0
+    label = 1 if family == POSITIVE_FAMILY else 0
     df = _assemble(rng, closes, p['noise_sigma'], vols,
                    lower_full, upper_full, segment, label)
 
@@ -359,6 +494,7 @@ def _anchored_pattern(dataset_idx: int, family: str) -> tuple[pd.DataFrame, dict
         'completion': round(completion, 4) if completion is not None else None,
         'volume_fading': bool(fading),
         'noise_sigma': round(p['noise_sigma'], 4),
+        'n_touch_upper': n_touch_up, 'n_touch_lower': n_touch_lo,
     }
     return df, meta
 
@@ -532,7 +668,7 @@ def generate_corpus(counts: dict[str, int], output_dir: str,
 
     entries = []
     for family, n in counts.items():
-        label = 1 if family == 'forming_wedge' else 0
+        label = 1 if family == POSITIVE_FAMILY else 0
         entries += [{'label': label, 'type': family, 'original_idx': i}
                     for i in range(n)]
     rng = np.random.RandomState(shuffle_seed)
@@ -549,7 +685,8 @@ def generate_corpus(counts: dict[str, int], output_dir: str,
         tasks.append((e['type'], e['original_idx'], str(dest / fname), fmt))
 
     n_pos = sum(1 for e in entries if e['label'] == 1)
-    print(f'Corpus v2 plan ({TOTAL_BARS}-bar windows): {n_total:,} datasets')
+    print(f'Corpus v2 plan ({TOTAL_BARS}-bar windows, positive class = '
+          f'{POSITIVE_FAMILY}): {n_total:,} datasets')
     for fam, n in counts.items():
         print(f'  {fam:<15} {n:>9,}')
     print(f'  positives {n_pos:,} ({n_pos/n_total*100:.1f}%)  |  '
