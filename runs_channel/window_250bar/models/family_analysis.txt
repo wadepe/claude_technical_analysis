@@ -1,0 +1,26 @@
+PER-FAMILY ANALYSIS  (window_250bar,  weights=cnn_best.weights.h5)
+==============================================================================
+
+Mean score by family:
+  forming_wedge   n= 30,320  mean=0.0981  median=0.0196  p95=0.5592
+  walk            n= 29,891  mean=0.0002  median=0.0000  p95=0.0000
+  channel         n= 39,930  mean=0.9631  median=1.0000  p95=1.0000
+  megaphone       n= 19,919  mean=0.0999  median=0.0123  p95=0.6313
+  stale_wedge     n= 19,940  mean=0.0000  median=0.0000  p95=0.0000
+
+False-positive rate by family at each threshold (positives: recall):
+  family           @0.5    @0.6    @0.7    @0.8    @0.9    @0.95 
+  ---------------------------------------------------------------
+  forming_wedge     0.059   0.045   0.032   0.021   0.009   0.005   (recall)
+  walk              0.000   0.000   0.000   0.000   0.000   0.000   (FP-rate)
+  channel           0.974   0.967   0.959   0.945   0.919   0.891   (FP-rate)
+  megaphone         0.069   0.055   0.041   0.029   0.017   0.010   (FP-rate)
+  stale_wedge       0.000   0.000   0.000   0.000   0.000   0.000   (FP-rate)
+
+Overall precision at each threshold:
+  @0.5    precision=0.9244  recall=0.9743  n_called=42,084
+  @0.6    precision=0.9404  recall=0.9671  n_called=41,064
+  @0.7    precision=0.9554  recall=0.9587  n_called=40,064
+  @0.8    precision=0.9690  recall=0.9446  n_called=38,923
+  @0.9    precision=0.9833  recall=0.9193  n_called=37,333
+  @0.95   precision=0.9905  recall=0.8912  n_called=35,928
