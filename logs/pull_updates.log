@@ -160,3 +160,33 @@ Fast-forward
 From https://github.com/wadepe/claude_technical_analysis
  * branch            master     -> FETCH_HEAD
 2026-07-31 03:00:02  [pull_updates]  Already up to date. No restart needed.
+2026-08-03 03:00:01  [pull_updates]  Fetching from origin/master ...
+From https://github.com/wadepe/claude_technical_analysis
+ * branch            master     -> FETCH_HEAD
+   d5f78f9..577e3a7  master     -> origin/master
+From https://github.com/wadepe/claude_technical_analysis
+ * branch            master     -> FETCH_HEAD
+Updating d5f78f9..577e3a7
+Fast-forward
+ .../window_250bar/models/cnn_best.weights.h5       | Bin 0 -> 5902864 bytes
+ .../window_250bar/models/family_analysis.txt       |  26 ++
+ source_code/analyze_v2_families.py                 |   5 +-
+ source_code/api_server.py                          |  39 +--
+ source_code/generate_wedges.py                     | 157 +++++++++++-
+ source_code/live_monitor.py                        | 279 +++++++++++++--------
+ source_code/plot_daily.py                          |   7 +-
+ source_code/wedge_db.py                            | 143 ++++++++---
+ 8 files changed, 496 insertions(+), 160 deletions(-)
+ create mode 100644 runs_channel/window_250bar/models/cnn_best.weights.h5
+ create mode 100644 runs_channel/window_250bar/models/family_analysis.txt
+2026-08-03 03:00:07  [pull_updates]  Pulled new commits (d5f78f952fc733ed168834740a318d20abe32a61 -> 577e3a76643e44ec78f79f29e1e020c2a854de13)
+2026-08-03 03:00:07  [pull_updates]  Code/model changes detected:
+2026-08-03 03:00:07  [pull_updates]    - runs_channel/window_250bar/models/cnn_best.weights.h5
+2026-08-03 03:00:07  [pull_updates]    - source_code/analyze_v2_families.py
+2026-08-03 03:00:07  [pull_updates]    - source_code/api_server.py
+2026-08-03 03:00:07  [pull_updates]    - source_code/generate_wedges.py
+2026-08-03 03:00:07  [pull_updates]    - source_code/live_monitor.py
+2026-08-03 03:00:07  [pull_updates]    - source_code/plot_daily.py
+2026-08-03 03:00:07  [pull_updates]    - source_code/wedge_db.py
+2026-08-03 03:00:07  [pull_updates]  Restarting live-monitor ...
+2026-08-03 03:00:12  [pull_updates]  live-monitor restarted successfully.
