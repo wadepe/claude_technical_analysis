@@ -17,9 +17,15 @@ set -euo pipefail
 # Derive the repo root from this script's own location (deploy/..) so the
 # path is correct regardless of which user/home the repo is cloned under.
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-SERVICE="live-monitor"
 BRANCH="master"
 LOG_TAG="pull_updates"
+
+# Every service that runs code from this repo and therefore needs restarting
+# when Python changes. wedge-api was missed when it was introduced: only
+# live-monitor was restarted, so the API silently kept serving a stale module
+# for days -- /scores and /signals ignored ?pattern= while the monitor was
+# already writing pattern rows. Any future service belongs in this list.
+SERVICES="live-monitor wedge-api"
 
 log() { echo "$(date '+%Y-%m-%d %H:%M:%S')  [$LOG_TAG]  $*"; }
 
@@ -61,18 +67,38 @@ fi
 log "Code/model changes detected:"
 echo "$CHANGED" | while read -r f; do log "  - $f"; done
 
-# ── Restart the monitor service ───────────────────────────────────────────────
-if systemctl is-active --quiet "$SERVICE"; then
-    log "Restarting $SERVICE ..."
-    sudo -n systemctl restart "$SERVICE" || { log "ERROR: passwordless sudo missing — run: echo \"$USER ALL=(root) NOPASSWD: /usr/bin/systemctl restart $SERVICE, /usr/bin/systemctl start $SERVICE\" | sudo tee /etc/sudoers.d/live-monitor-cron"; exit 1; }
-    sleep 5
-    if systemctl is-active --quiet "$SERVICE"; then
-        log "$SERVICE restarted successfully."
-    else
-        log "ERROR: $SERVICE failed to restart. Check: journalctl -u $SERVICE -n 50"
-        exit 1
+# ── Restart every service that runs this repo's code ─────────────────────────
+# A service that is not installed is skipped, not treated as an error: the API
+# unit may legitimately not exist on an older box.
+RC=0
+for SERVICE in $SERVICES; do
+    if ! systemctl list-unit-files "$SERVICE.service" &>/dev/null \
+         || ! systemctl cat "$SERVICE" &>/dev/null; then
+        log "$SERVICE is not installed — skipping."
+        continue
     fi
-else
-    log "$SERVICE is not running — starting it now ..."
-    sudo -n systemctl start "$SERVICE"
-fi
+
+    if systemctl is-active --quiet "$SERVICE"; then
+        log "Restarting $SERVICE ..."
+        if ! sudo -n systemctl restart "$SERVICE"; then
+            log "ERROR: could not restart $SERVICE. If this is a sudo problem, run:"
+            log "  echo \"$USER ALL=(root) NOPASSWD: /usr/bin/systemctl restart $SERVICE, /usr/bin/systemctl start $SERVICE\" | sudo tee /etc/sudoers.d/${SERVICE}-cron"
+            RC=1
+            continue
+        fi
+        sleep 5
+        if systemctl is-active --quiet "$SERVICE"; then
+            log "$SERVICE restarted successfully."
+        else
+            log "ERROR: $SERVICE failed to restart. Check: journalctl -u $SERVICE -n 50"
+            RC=1
+        fi
+    else
+        log "$SERVICE is not running — starting it now ..."
+        sudo -n systemctl start "$SERVICE" || RC=1
+    fi
+done
+
+# One service failing must not stop the others from being restarted, but the
+# job should still exit non-zero so the failure is visible in the cron log.
+exit $RC
