@@ -75,8 +75,19 @@ def main() -> None:
     lines = [f'PER-FAMILY ANALYSIS  ({root.name},  weights={Path(weights).name})',
              '=' * 78]
 
+    # Families come from the manifest, not a hardcoded list: peak-family
+    # corpora contain triple_top/double_top/hs_stale and no megaphone or
+    # stale_wedge, and a hardcoded name that is absent yields an empty slice
+    # that crashes np.percentile. Positive class first, then negatives by
+    # descending mean score so the worst confusion is at the top.
+    present = sorted(set(families))
+    pos_fams = [f for f in present if bool(labels[families == f][0])]
+    neg_fams = sorted((f for f in present if f not in pos_fams),
+                      key=lambda f: -probs[families == f].mean())
+    fam_order = pos_fams + neg_fams
+
     lines.append(f'\nMean score by family:')
-    for fam in ('forming_wedge', 'walk', 'channel', 'megaphone', 'stale_wedge'):
+    for fam in fam_order:
         m = families == fam
         lines.append(f'  {fam:<15} n={m.sum():>7,}  mean={probs[m].mean():.4f}  '
                      f'median={np.median(probs[m]):.4f}  p95={np.percentile(probs[m], 95):.4f}')
@@ -86,7 +97,7 @@ def main() -> None:
     header = f'  {"family":<15}' + ''.join(f'  @{t:<5}' for t in THRESHOLDS)
     lines.append(header)
     lines.append('  ' + '-' * (len(header) - 2))
-    for fam in ('forming_wedge', 'walk', 'channel', 'megaphone', 'stale_wedge'):
+    for fam in fam_order:
         m    = families == fam
         vals = []
         for t in THRESHOLDS:

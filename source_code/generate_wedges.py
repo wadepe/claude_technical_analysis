@@ -81,7 +81,34 @@ SEED_OFFSETS = {
     'channel':       2_000_000,
     'megaphone':     3_000_000,
     'stale_wedge':   4_000_000,
+    # peak-family formations (head and shoulders and its confusions)
+    'hs':               5_000_000,
+    'inverse_hs':       6_000_000,
+    'triple_top':       7_000_000,
+    'double_top':       8_000_000,
+    'hs_stale':         9_000_000,
+    'triple_bottom':   10_000_000,
+    'double_bottom':   11_000_000,
+    'inverse_hs_stale':12_000_000,
 }
+
+# Peak families as (shape, orientation). Orientation is a property of the
+# family, not something derived from its name, because every confusion shape
+# needs BOTH orientations: a triple top is a trivially easy negative for the
+# inverse model (it is upside down from everything that model sees), while a
+# triple BOTTOM is its genuinely hard case. Each corpus therefore pairs its
+# positive with orientation-matched confusions.
+_PEAK_SHAPE = {
+    'hs':               ('hs',     +1),
+    'inverse_hs':       ('hs',     -1),
+    'hs_stale':         ('hs',     +1),
+    'inverse_hs_stale': ('hs',     -1),
+    'triple_top':       ('triple', +1),
+    'triple_bottom':    ('triple', -1),
+    'double_top':       ('double', +1),
+    'double_bottom':    ('double', -1),
+}
+PEAK_FAMILIES = tuple(_PEAK_SHAPE)
 
 # ── Class-separation geometry (the exclusion band) ────────────────────────────
 WEDGE_COMPLETION_RANGE   = (0.50, 0.95)   # fraction of run-to-apex at right edge
@@ -500,6 +527,276 @@ def _anchored_pattern(dataset_idx: int, family: str) -> tuple[pd.DataFrame, dict
 
 
 # =============================================================================
+# Peak-family formations  (head and shoulders + its confusions)
+# =============================================================================
+#
+# Landmarks: left shoulder, trough, HEAD, trough, right shoulder. The NECKLINE
+# is the line through the two troughs and may slope. Anchoring follows the v2
+# convention: the right shoulder peaks HS_TAIL_RNG bars before the right edge
+# and price is falling away from it but has NOT yet broken the neckline, so a
+# score means "an H&S has just completed, the break may be coming" rather than
+# "one happened somewhere in this window".
+#
+# The exclusion band is built on HEAD PROMINENCE, because a head and shoulders
+# is a triple top with a taller middle peak and that is the only thing telling
+# them apart:
+#     hs / inverse_hs : head exceeds the taller shoulder by >= HS_HEAD_EXCESS
+#     triple_top      : all three peaks within +/- TRIPLE_TOP_TOL
+# 0.20 vs 0.10 leaves an unambiguous gap, exactly as the width-ratio band does
+# for wedge / channel / megaphone.
+#
+# inverse_hs is the vertical mirror. It is a POSITIVE for its own model and a
+# hard negative for the standard one (and vice versa) -- the two are far more
+# informative negatives for each other than any random walk.
+
+HS_SHOULDER_HEIGHT_RNG = (0.10, 0.28)      # shoulder height above the neckline
+# Head prominence above the TALLER shoulder. The floor is 0.30 rather than
+# 0.20 because noise erodes it: at 0.20 the REALISED excess (measured on the
+# generated series at the true landmarks) had a 5th percentile of just +0.079
+# against a triple_top 95th percentile of +0.129, leaving 8% of positives
+# inside the negatives' range. The corpus's whole premise is that no ambiguous
+# case carries a hard label.
+HS_HEAD_EXCESS_RNG     = (0.30, 0.85)      # head above the TALLER shoulder
+TRIPLE_TOP_TOL         = 0.10              # all peaks within +/- this
+HS_SHOULDER_ASYM_RNG   = (-0.15, 0.15)     # right vs left shoulder height
+HS_NECK_SLOPE_RNG      = (-0.0022, 0.0022) # per bar, scaled by _SCALE
+HS_TAIL_RNG            = (5, 30)           # bars after the right-shoulder peak
+HS_TAIL_RETRACE_RNG    = (0.15, 0.70)      # fraction of the way back to neckline
+HS_SEG_JITTER          = (0.75, 1.30)      # per-leg duration jitter
+# Peak families need much stronger reversion than the channel families. There,
+# weak reversion (0.08-0.18) is the point: price should wander between the
+# bounds. Here the skeleton IS the pattern, so weak reversion let the realised
+# path drift off it -- measured at only 48% of right shoulders landing within
+# 10 bars of the anchor, and a median of 6 spurious peaks instead of 3. Noise
+# must be texture on the shape, not a competing signal.
+HS_REV_STRENGTH_RNG    = (0.34, 0.58)
+HS_NOISE_SCALE         = 0.55              # shape-relative noise damping
+HS_BREAK_DEPTH_RNG     = (0.35, 1.10)      # stale: break depth, x head height
+HS_STALE_POST_RNG      = (0.18, 0.45)      # stale: post-break bars, frac of window
+
+
+def _peak_skeleton(rng, n_vis: int, family: str):
+    """
+    Build the piecewise-linear price skeleton for a peak-family pattern plus
+    the per-bar neckline. Returns (skeleton, neckline, meta) in normalised
+    price units; the caller adds noise around the skeleton.
+
+    Shape and orientation both come from _PEAK_SHAPE, so one construction
+    covers tops and bottoms.
+    """
+    shape, orient = _PEAK_SHAPE[family]
+    sign = float(orient)
+
+    neck0    = rng.uniform(0.35, 0.55)
+    n_slope  = rng.uniform(*HS_NECK_SLOPE_RNG) * _SCALE
+    h_sh     = rng.uniform(*HS_SHOULDER_HEIGHT_RNG)
+
+    if shape == 'hs':
+        asym    = rng.uniform(*HS_SHOULDER_ASYM_RNG)
+        h_ls    = h_sh
+        h_rs    = h_sh * (1.0 + asym)
+        excess  = rng.uniform(*HS_HEAD_EXCESS_RNG)
+        h_head  = max(h_ls, h_rs) * (1.0 + excess)
+    elif shape == 'triple':
+        # three extremes of essentially equal size -- the hard negative
+        h_ls   = h_sh
+        h_head = h_sh * (1.0 + rng.uniform(-TRIPLE_TOP_TOL, TRIPLE_TOP_TOL))
+        h_rs   = h_sh * (1.0 + rng.uniform(-TRIPLE_TOP_TOL, TRIPLE_TOP_TOL))
+    elif shape == 'double':
+        h_ls, h_head, h_rs = h_sh, None, h_sh * (1.0 + rng.uniform(-0.12, 0.12))
+    else:
+        raise ValueError(family)
+
+    # ── leg durations ────────────────────────────────────────────────────────
+    tail = int(rng.randint(*HS_TAIL_RNG))
+    n_legs = 4 if h_head is not None else 2        # rises+falls before the RS
+    body = n_vis - tail
+    base = body / (n_legs + 1)
+    segs = np.maximum(
+        (base * rng.uniform(*HS_SEG_JITTER, size=n_legs + 1)).astype(int), 4)
+    segs = (segs * (body / segs.sum())).astype(int)
+    segs[-1] += body - segs.sum()
+
+    # ── landmark bars and their prices ───────────────────────────────────────
+    # Heights are measured ABOVE THE NECKLINE, so a sloping neckline can
+    # cancel them out in absolute price: with a falling neckline the head can
+    # end up LOWER than the left shoulder while still being "taller" by the
+    # parameter. A head that is not the highest point is not a head and
+    # shoulders, and the same effect turns triple tops into accidental H&S
+    # shapes. So the defining property is enforced on the ABSOLUTE landmark
+    # prices, shrinking the neckline slope until it holds.
+    heights = ([h_ls, 0.0, h_head, 0.0, h_rs] if h_head is not None
+               else [h_ls, 0.0, h_rs])
+
+    def _landmarks(slope):
+        t_, p_ = [0], [neck0 - sign * rng.uniform(0.0, 0.06)]
+        cursor = 0
+        for k, hgt in enumerate(heights):
+            cursor += segs[k] if k < len(segs) else segs[-1]
+            cursor = min(cursor, body)
+            t_.append(cursor)
+            p_.append(neck0 + slope * cursor + sign * hgt)
+        return t_, p_
+
+    for _ in range(12):
+        t, p = _landmarks(n_slope)
+        peaks = [p[1], p[3], p[5]] if h_head is not None else [p[1], p[3]]
+        pk = [sign * v for v in peaks]           # orientation-normalised
+        if shape == 'hs':
+            # head must clear BOTH shoulders by a visible margin
+            margin = 0.25 * min(h_ls, h_rs)
+            if pk[1] - max(pk[0], pk[2]) >= margin:
+                break
+        elif shape == 'triple':
+            # no extreme may stand out: absolute spread stays inside the band
+            if (max(pk) - min(pk)) <= TRIPLE_TOP_TOL * 2.0 * h_sh:
+                break
+        else:                                    # double
+            if abs(pk[0] - pk[1]) <= 0.25 * h_sh:
+                break
+        n_slope *= 0.55                          # flatten and retry
+    else:
+        n_slope = 0.0
+        t, p = _landmarks(n_slope)
+
+    # right shoulder is the last landmark; the tail falls back toward the neck
+    t_rs, p_rs = t[-1], p[-1]
+    neck_end   = neck0 + n_slope * (n_vis - 1)
+    retrace    = rng.uniform(*HS_TAIL_RETRACE_RNG)
+    p_end      = p_rs - sign * retrace * abs(p_rs - neck_end)
+    t.append(n_vis - 1)
+    p.append(p_end)
+
+    skeleton = np.interp(np.arange(n_vis), t, p)
+    neckline = neck0 + n_slope * np.arange(n_vis, dtype=float)
+
+    meta = {
+        'neck0': neck0, 'neck_slope': n_slope, 'sign': sign,
+        'h_left': h_ls, 'h_head': h_head, 'h_right': h_rs,
+        't_landmarks': [int(x) for x in t], 'tail_bars': tail,
+        't_right_shoulder': int(t_rs), 'tail_retrace': retrace,
+    }
+    return skeleton, neckline, meta
+
+
+def _skeleton_closes(rng, skeleton, noise_sigma, rev_strength, momentum_str,
+                     vol_persist, fat_prob, fat_mult):
+    """Mean-reverting noise around a price skeleton (peak families)."""
+    n = len(skeleton)
+    closes = np.empty(n)
+    closes[0] = skeleton[0]
+    vol_t = noise_sigma
+    for i in range(1, n):
+        vol_t, step = _garch_step(rng, vol_t, noise_sigma, vol_persist,
+                                  fat_prob, fat_mult)
+        mom = momentum_str * (closes[i-1] - closes[i-2]) if i >= 2 else 0.0
+        rev = rev_strength * (skeleton[i-1] - closes[i-1])
+        closes[i] = closes[i-1] + (skeleton[i] - skeleton[i-1]) + rev + mom + step
+    return closes
+
+
+def generate_peak_pattern(dataset_idx: int, family: str):
+    """
+    Head-and-shoulders family generator: hs, inverse_hs, triple_top,
+    double_top, hs_stale. Right-edge anchored (see the notes above).
+    """
+    rng = np.random.RandomState(SEED_OFFSETS[family] + dataset_idx)
+    p   = _shared_realism_params(rng)
+
+    stale = family in ('hs_stale', 'inverse_hs_stale')
+    # a stale sample is built as its live counterpart, then broken through
+    build = {'hs_stale': 'hs', 'inverse_hs_stale': 'inverse_hs'}.get(family,
+                                                                     family)
+
+    n_vis   = int(rng.randint(int(TOTAL_BARS * 0.55), int(TOTAL_BARS * 0.92) + 1))
+    if stale:
+        # leave room for the break and the aftermath inside the window
+        post  = int(n_vis * rng.uniform(*HS_STALE_POST_RNG))
+        n_vis = max(n_vis - post, 60)
+    pre_pad = TOTAL_BARS - n_vis - (post if stale else 0)
+
+    skeleton, neckline, m = _peak_skeleton(rng, n_vis, build)
+    hs_sigma = p['noise_sigma'] * HS_NOISE_SCALE
+    closes_pat = _skeleton_closes(rng, skeleton, hs_sigma,
+                                  rng.uniform(*HS_REV_STRENGTH_RNG),
+                                  p['momentum_str'],
+                                  p['vol_persist'], p['fat_prob'], p['fat_mult'])
+
+    # A positive must NOT have broken the neckline yet: the whole point of the
+    # anchor is that the break is still ahead. Clamp any noise excursion that
+    # would have broken it early.
+    if not stale:
+        sign = m['sign']
+        floor = neckline + sign * 0.012
+        closes_pat = np.where(sign * (closes_pat - floor) < 0, floor, closes_pat)
+
+    segment = np.zeros(TOTAL_BARS, dtype=np.int8)
+    lower_full = np.full(TOTAL_BARS, np.nan)
+    upper_full = np.full(TOTAL_BARS, np.nan)
+
+    parts = []
+    if pre_pad > 0:
+        parts.append(_bridge_prepad(
+            rng, pre_pad, closes_pat[0],
+            p['noise_sigma'] * rng.uniform(0.70, 1.20),
+            p['fat_prob'], p['fat_mult']))
+    parts.append(closes_pat)
+
+    n_break = 0
+    if stale:
+        # break through the neckline, then drift on the far side
+        sign  = m['sign']
+        depth = rng.uniform(*HS_BREAK_DEPTH_RNG) * (m['h_head'] or m['h_left'])
+        target = neckline[-1] - sign * depth
+        n_break = post
+        brk = np.linspace(closes_pat[-1], target, n_break) + \
+            _fat_walk(rng, n_break, p['noise_sigma'] * 0.9,
+                      p['fat_prob'], p['fat_mult']).cumsum() * 0.35
+        parts.append(brk)
+
+    closes = np.concatenate(parts)
+    closes = closes[:TOTAL_BARS] if len(closes) >= TOTAL_BARS else np.concatenate(
+        [closes, np.full(TOTAL_BARS - len(closes), closes[-1])])
+
+    segment[pre_pad:pre_pad + n_vis] = 1
+    if n_break:
+        segment[pre_pad + n_vis:pre_pad + n_vis + n_break] = 2
+    # the neckline is the meaningful reference line for this family
+    lower_full[pre_pad:pre_pad + n_vis] = neckline
+
+    fading = rng.random() < (0.55 if _PEAK_SHAPE[build][0] == 'hs' else 0.40)
+    vols   = _volume_profile(rng, pre_pad, n_vis, n_break,
+                             TOTAL_BARS - pre_pad - n_vis - n_break,
+                             fading, p['vol_spike_prob'])
+
+    label = 1 if family == POSITIVE_FAMILY else 0
+    df = _assemble(rng, closes, p['noise_sigma'], vols,
+                   lower_full, upper_full, segment, label)
+
+    meta = {
+        'dataset_idx': dataset_idx, 'family': family, 'label': label,
+        'total_bars': TOTAL_BARS, 'n_visible': n_vis, 'pre_pad': pre_pad,
+        'n_break': n_break,
+        'neck_slope': round(m['neck_slope'], 6),
+        'h_left':  round(m['h_left'], 4),
+        'h_head':  None if m['h_head'] is None else round(m['h_head'], 4),
+        'h_right': round(m['h_right'], 4),
+        'head_excess': (None if m['h_head'] is None else
+                        round(m['h_head'] / max(m['h_left'], m['h_right']) - 1, 4)),
+        'shoulder_asym': round(abs(m['h_right'] - m['h_left'])
+                               / max(m['h_left'], 1e-9), 4),
+        'tail_bars': m['tail_bars'], 'orientation': int(m['sign']),
+        'noise_sigma': round(p['noise_sigma'], 4),
+        # pattern-relative landmark bars: start, LS, trough, HEAD, trough, RS,
+        # right edge (no head entry for double_top). Exposed so validation can
+        # check the realised series at the intended landmarks instead of
+        # guessing their positions.
+        't_landmarks': m['t_landmarks'],
+    }
+    return df, meta
+
+
+# =============================================================================
 # Stale wedge (completed + broken out, resolved well before the right edge)
 # =============================================================================
 
@@ -641,6 +938,8 @@ def generate(family: str, dataset_idx: int) -> tuple[pd.DataFrame, dict]:
         return generate_stale_wedge(dataset_idx)
     if family == 'walk':
         return generate_walk(dataset_idx)
+    if family in PEAK_FAMILIES:
+        return generate_peak_pattern(dataset_idx, family)
     raise ValueError(f'unknown family {family!r}')
 
 
@@ -807,6 +1106,12 @@ def main() -> None:
     parser.add_argument('--n-channel',   type=int, default=150_000)
     parser.add_argument('--n-megaphone', type=int, default=100_000)
     parser.add_argument('--n-stale',     type=int, default=100_000)
+    parser.add_argument('--counts', default=None, metavar='FAM=N,FAM=N',
+                        help='Explicit family counts, overriding the --n-* '
+                             'flags entirely. Required for peak-family '
+                             'corpora, which have more families than there '
+                             'are flags. Known families: '
+                             + ', '.join(sorted(SEED_OFFSETS)))
     parser.add_argument('--output-dir',  default=f'../runs_v2/window_{TOTAL_BARS}bar')
     parser.add_argument('--format', choices=['parquet', 'csv'], default='parquet')
     parser.add_argument('--val-fraction', type=float, default=0.10)
@@ -825,14 +1130,29 @@ def main() -> None:
         print_stats()
 
     if args.corpus:
-        generate_corpus(
-            counts={
+        if args.counts:
+            counts = {}
+            for spec in args.counts.split(','):
+                fam, _, n = spec.partition('=')
+                fam = fam.strip()
+                if fam not in SEED_OFFSETS:
+                    raise SystemExit(f'unknown family {fam!r} in --counts; '
+                                     f'known: {", ".join(sorted(SEED_OFFSETS))}')
+                counts[fam] = int(n)
+            if POSITIVE_FAMILY not in counts:
+                raise SystemExit(
+                    f'--counts has no entry for the positive family '
+                    f'{POSITIVE_FAMILY!r}; the corpus would have no positives')
+        else:
+            counts = {
                 'forming_wedge': args.n_wedge,
                 'walk':          args.n_walk,
                 'channel':       args.n_channel,
                 'megaphone':     args.n_megaphone,
                 'stale_wedge':   args.n_stale,
-            },
+            }
+        generate_corpus(
+            counts=counts,
             output_dir=args.output_dir,
             fmt=args.format,
             val_fraction=args.val_fraction,
