@@ -174,6 +174,10 @@ APEX_GATE_MAX_MIN = 360
 #   run_dir    <project root>/<run_dir>/window_<N>bar/models/cnn_best.weights.h5
 #   threshold  default score threshold (overridable per formation on the CLI)
 #   apex_gate  require converging lines with a near apex before signalling
+#   geometry   'envelope' fits upper/lower trendlines and writes a signals
+#              row; None logs the score only
+#   log_only   True records detections but never raises signal=1 -- the
+#              formation is being collected for study, not acted on
 #
 # Channels deliberately have NO apex gate: their lines are parallel by
 # definition, so an apex test would reject nearly all of them. The wedge gate
@@ -183,11 +187,34 @@ APEX_GATE_MAX_MIN = 360
 # analysis put precision at 0.983 / recall 0.919 there versus 0.969 / 0.945 at
 # 0.8, and the 2008-2021 scan showed the channel model is already 13x more
 # selective than the wedge model, so the recall cost is cheap.
+#
+# hs / inverse_hs are LOG-ONLY. Both detect their shape well -- held-out AUC
+# 0.9999 / 1.0000, only 0.4% / 0.3% leakage from triple tops and bottoms, and
+# a sane 45 / 71 events per year on SPY 2008-2021 with near-zero overlap
+# against the other formations. But the forward-return study found no edge to
+# act on: signed returns run the WRONG way for hs (down-rate 40.0% at 2hr
+# against a 46.5% baseline), inverse_hs's apparent 54.6% up-rate at 4hr is a
+# 54.2% market drift, and both sit at 0.93-1.02x baseline |return| so there is
+# not even the volatility signature wedges and channels have. They are logged
+# so the data accumulates for a later look, not because they are tradeable.
+#
+# Their geometry is None because fit_wedge_lines fits an ENVELOPE, which is
+# meaningless for a head and shoulders -- the meaningful line is the neckline
+# through the two troughs, and that needs a dedicated fitter. Logging envelope
+# slopes under a mid_travel column would be quietly wrong data.
 FORMATIONS = {
-    'wedge':   {'windows': (50, 250), 'run_dir': 'runs',
-                'threshold': 0.8, 'apex_gate': True},
-    'channel': {'windows': (250,),    'run_dir': 'runs_channel',
-                'threshold': 0.9, 'apex_gate': False},
+    'wedge':      {'windows': (50, 250), 'run_dir': 'runs',
+                   'threshold': 0.8, 'apex_gate': True,
+                   'geometry': 'envelope', 'log_only': False},
+    'channel':    {'windows': (250,),    'run_dir': 'runs_channel',
+                   'threshold': 0.9, 'apex_gate': False,
+                   'geometry': 'envelope', 'log_only': False},
+    'hs':         {'windows': (250,),    'run_dir': 'runs_hs',
+                   'threshold': 0.9, 'apex_gate': False,
+                   'geometry': None,      'log_only': True},
+    'inverse_hs': {'windows': (250,),    'run_dir': 'runs_inverse_hs',
+                   'threshold': 0.9, 'apex_gate': False,
+                   'geometry': None,      'log_only': True},
 }
 
 
@@ -729,7 +756,11 @@ def _wedge_stats(window_deque: deque, score: Optional[float],
                      The signal_* flag requires score >= threshold AND gate_ok,
                      so a high-score bar with signal=0 was geometry-gated.
     """
-    if score is None or score < threshold:
+    # Formations without an envelope geometry (see FORMATIONS) log the score
+    # only: fitting upper/lower trendlines to a head and shoulders would put
+    # meaningless numbers in columns named for wedge geometry.
+    if score is None or score < threshold or \
+            FORMATIONS[pattern]['geometry'] is None:
         return dict(_ZERO_STATS)
 
     from classify_wedge import fit_wedge_lines
@@ -915,27 +946,39 @@ def run_live(ticker: str, threshold: float, dry_run: bool,
                 dq.append(bar_arr)
 
             # ── Score every formation on every one of its windows ─────────────
-            scores, stats, sigs, depths = {}, {}, {}, {}
+            # A DETECTION is a threshold crossing that passed the formation's
+            # gate. A SIGNAL is a detection worth acting on. They differ for
+            # log-only formations, which are recorded but never raise a signal.
+            scores, stats, sigs, dets, depths = {}, {}, {}, {}, {}
             for key, model in models.items():
                 pattern, w = key
+                cfg = FORMATIONS[pattern]
                 thr = thresholds[pattern]
                 sc  = _score_window(model, windows[w], n_bars_map[key])
                 st  = _wedge_stats(windows[w], sc, thr, pattern)
+                # a formation without an apex gate always passes it; do not
+                # read gate_ok from the zeroed stats of a geometry-less one
+                gate_ok = st.get('gate_ok', False) if cfg['apex_gate'] else True
+                over = bool(sc is not None and sc >= thr and gate_ok)
                 scores[key] = sc
                 stats[key]  = st
-                sigs[key]   = int(sc is not None and sc >= thr
-                                  and st.get('gate_ok', False))
+                dets[key]   = over
+                sigs[key]   = 0 if cfg['log_only'] else int(over)
                 depths[key] = len(windows[w])
 
             # ── Log + write ───────────────────────────────────────────────────
+            # '*' = actionable signal, '.' = detection on a log-only formation
+            def _mark(k):
+                return '*' if sigs[k] else ('.' if dets[k] else ' ')
+
             score_str = '  '.join(
-                (f'{p}@{w}={scores[(p, w)]:.4f}'
-                 f'{"*" if sigs[(p, w)] else " "}')
+                f'{p}@{w}={scores[(p, w)]:.4f}{_mark((p, w))}'
                 if scores[(p, w)] is not None else f'{p}@{w}=n/a '
                 for (p, w) in sorted(models)
             )
 
             fired = [k for k in sorted(models) if sigs[k]]
+            logged = [k for k in sorted(models) if dets[k] and not sigs[k]]
             note = ''
             if fired:
                 parts = []
@@ -949,6 +992,9 @@ def run_live(ticker: str, threshold: float, dry_run: bool,
                                     f'@ ${st["apex_price"]:.2f}')
                     parts.append(f'{pattern}@{w} ' + ' '.join(bits))
                 note = '  <<< ' + ' | '.join(parts) + ' >>>'
+            if logged:
+                note += ('  [log-only: '
+                         + ', '.join(f'{p}@{w}' for p, w in logged) + ']')
 
             log.log(logging.WARNING if fired else logging.INFO,
                     f'{bar["timestamp"]}  {ticker}  '
@@ -1038,12 +1084,14 @@ def run_replay(ticker: str, threshold: float, dry_run: bool,
         scores, stats, sigs, depths = {}, {}, {}, {}
         for key, m in models.items():
             pattern, w = key
+            cfg = FORMATIONS[pattern]
             thr = thresholds[pattern]
             sc  = _score_window(m, windows[w], n_bars_map[key])
             st  = _wedge_stats(windows[w], sc, thr, pattern)
+            gate_ok = st.get('gate_ok', False) if cfg['apex_gate'] else True
+            over = bool(sc is not None and sc >= thr and gate_ok)
             scores[key], stats[key] = sc, st
-            sigs[key]   = int(sc is not None and sc >= thr
-                              and st.get('gate_ok', False))
+            sigs[key]   = 0 if cfg['log_only'] else int(over)
             depths[key] = len(windows[w])
 
         if any(sigs.values()):
