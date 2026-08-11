@@ -1,0 +1,32 @@
+PER-FAMILY ANALYSIS  (window_250bar,  weights=cnn_best.weights.h5)
+==============================================================================
+
+Mean score by family:
+  hs              n= 40,115  mean=0.9944  median=0.9999  p95=1.0000
+  triple_top      n= 26,158  mean=0.0173  median=0.0000  p95=0.0614
+  double_top      n= 13,841  mean=0.0005  median=0.0000  p95=0.0001
+  forming_wedge   n=  6,089  mean=0.0004  median=0.0000  p95=0.0000
+  inverse_hs      n= 12,074  mean=0.0004  median=0.0000  p95=0.0000
+  channel         n=  5,910  mean=0.0004  median=0.0000  p95=0.0000
+  hs_stale        n= 15,965  mean=0.0000  median=0.0000  p95=0.0000
+  walk            n= 19,848  mean=0.0000  median=0.0000  p95=0.0000
+
+False-positive rate by family at each threshold (positives: recall):
+  family           @0.5    @0.6    @0.7    @0.8    @0.9    @0.95 
+  ---------------------------------------------------------------
+  hs                0.997   0.996   0.994   0.993   0.989   0.985   (recall)
+  triple_top        0.010   0.008   0.006   0.004   0.002   0.001   (FP-rate)
+  double_top        0.000   0.000   0.000   0.000   0.000   0.000   (FP-rate)
+  forming_wedge     0.000   0.000   0.000   0.000   0.000   0.000   (FP-rate)
+  inverse_hs        0.000   0.000   0.000   0.000   0.000   0.000   (FP-rate)
+  channel           0.000   0.000   0.000   0.000   0.000   0.000   (FP-rate)
+  hs_stale          0.000   0.000   0.000   0.000   0.000   0.000   (FP-rate)
+  walk              0.000   0.000   0.000   0.000   0.000   0.000   (FP-rate)
+
+Overall precision at each threshold:
+  @0.5    precision=0.9932  recall=0.9968  n_called=40,260
+  @0.6    precision=0.9949  recall=0.9959  n_called=40,157
+  @0.7    precision=0.9962  recall=0.9944  n_called=40,044
+  @0.8    precision=0.9976  recall=0.9926  n_called=39,917
+  @0.9    precision=0.9985  recall=0.9892  n_called=39,739
+  @0.95   precision=0.9992  recall=0.9850  n_called=39,544
