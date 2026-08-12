@@ -188,3 +188,25 @@ To https://github.com/wadepe/claude_technical_analysis.git
 2026-08-10 19:00:06  [push_results]  Pushed to origin/master successfully.
 Chart saved: /home/wpearce/claude_technical_analysis/rising_wedge_chart.png
 2026-08-11 19:00:03  [push_results]  Daily chart regenerated (local only).
+[master 477c77c] auto: log update 2026-08-11  [bars=22607, scores=17985]
+ 2 files changed, 12 insertions(+)
+2026-08-11 19:00:03  [push_results]  Committed log update.
+To https://github.com/wadepe/claude_technical_analysis.git
+ ! [rejected]        master -> master (fetch first)
+error: failed to push some refs to 'https://github.com/wadepe/claude_technical_analysis.git'
+hint: Updates were rejected because the remote contains work that you do not
+hint: have locally. This is usually caused by another repository pushing to
+hint: the same ref. If you want to integrate the remote changes, use
+hint: 'git pull' before pushing again.
+hint: See the 'Note about fast-forwards' in 'git push --help' for details.
+2026-08-11 19:00:05  [push_results]  First push attempt failed — retrying in 30 s ...
+To https://github.com/wadepe/claude_technical_analysis.git
+ ! [rejected]        master -> master (fetch first)
+error: failed to push some refs to 'https://github.com/wadepe/claude_technical_analysis.git'
+hint: Updates were rejected because the remote contains work that you do not
+hint: have locally. This is usually caused by another repository pushing to
+hint: the same ref. If you want to integrate the remote changes, use
+hint: 'git pull' before pushing again.
+hint: See the 'Note about fast-forwards' in 'git push --help' for details.
+Chart saved: /home/wpearce/claude_technical_analysis/rising_wedge_chart.png
+2026-08-12 19:00:03  [push_results]  Daily chart regenerated (local only).
