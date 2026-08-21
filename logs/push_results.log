@@ -330,3 +330,23 @@ hint: use 'git pull' before pushing again.
 hint: See the 'Note about fast-forwards' in 'git push --help' for details.
 Chart saved: /home/wpearce/claude_technical_analysis/rising_wedge_chart.png
 2026-08-20 19:00:03  [push_results]  Daily chart regenerated (local only).
+[master 7b2f361] auto: log update 2026-08-20  [bars=28537, scores=26160]
+ 2 files changed, 38 insertions(+)
+2026-08-20 19:00:03  [push_results]  Committed log update.
+To https://github.com/wadepe/claude_technical_analysis.git
+ ! [rejected]        master -> master (non-fast-forward)
+error: failed to push some refs to 'https://github.com/wadepe/claude_technical_analysis.git'
+hint: Updates were rejected because the tip of your current branch is behind
+hint: its remote counterpart. If you want to integrate the remote changes,
+hint: use 'git pull' before pushing again.
+hint: See the 'Note about fast-forwards' in 'git push --help' for details.
+2026-08-20 19:00:09  [push_results]  First push attempt failed — retrying in 30 s ...
+To https://github.com/wadepe/claude_technical_analysis.git
+ ! [rejected]        master -> master (non-fast-forward)
+error: failed to push some refs to 'https://github.com/wadepe/claude_technical_analysis.git'
+hint: Updates were rejected because the tip of your current branch is behind
+hint: its remote counterpart. If you want to integrate the remote changes,
+hint: use 'git pull' before pushing again.
+hint: See the 'Note about fast-forwards' in 'git push --help' for details.
+Chart saved: /home/wpearce/claude_technical_analysis/rising_wedge_chart.png
+2026-08-21 19:00:03  [push_results]  Daily chart regenerated (local only).
