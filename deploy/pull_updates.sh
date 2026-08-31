@@ -44,7 +44,20 @@ if git merge-base --is-ancestor "origin/$BRANCH" HEAD 2>/dev/null; then
     exit 0
 fi
 
-git pull origin "$BRANCH"
+# --rebase, not a plain pull. push_results.sh commits log updates locally, so
+# once the dev box pushes code the two histories diverge and a bare `git pull`
+# refuses outright ("divergent branches"), leaving the server stuck on old
+# code while its local commits pile up. Rebasing replays the server's
+# log-only commits on top of the incoming code, which is always the correct
+# resolution here: the server never edits tracked source.
+if ! git pull --rebase origin "$BRANCH"; then
+    git rebase --abort 2>/dev/null || true
+    log "ERROR: could not rebase onto origin/$BRANCH. Resolve by hand:"
+    log "  cd $REPO_DIR && git status && git pull --rebase origin $BRANCH"
+    log "  (server commits are log-only; 'git reset --hard origin/$BRANCH' is"
+    log "   a safe fallback -- wedge.db is gitignored and untouched)"
+    exit 1
+fi
 AFTER=$(git rev-parse HEAD)
 
 if [ "$BEFORE" = "$AFTER" ]; then

@@ -90,12 +90,36 @@ PYEOF
 git commit -m "auto: log update $(date '+%Y-%m-%d')  [${ROWS}]"
 log "Committed log update."
 
+# ── Sync with origin BEFORE pushing ──────────────────────────────────────────
+# Without this the push is non-fast-forward the moment the dev box pushes
+# code between two runs, and since the local commit is already made, every
+# subsequent run adds another stranded commit while pull_updates.sh separately
+# refuses to pull a diverged branch. That deadlock ran for three weeks in
+# August 2026: 14 local commits, the server frozen on old code, the monitor
+# collecting fine the whole time so nothing looked wrong from the outside.
+#
+# Rebase is always the right resolution here because this script only ever
+# commits logs -- the server never edits tracked source.
+log "Rebasing onto origin/$BRANCH before pushing ..."
+git fetch origin "$BRANCH"
+if ! git rebase "origin/$BRANCH"; then
+    git rebase --abort 2>/dev/null || true
+    log "ERROR: rebase onto origin/$BRANCH failed. The local commit is kept;"
+    log "resolve by hand: cd $REPO_DIR && git pull --rebase origin $BRANCH"
+    exit 1
+fi
+
 # ── Push (retry once on transient network failure) ────────────────────────────
 if git push origin "$BRANCH"; then
     log "Pushed to origin/$BRANCH successfully."
-else
-    log "First push attempt failed — retrying in 30 s ..."
-    sleep 30
-    git push origin "$BRANCH"
+elif sleep 30; git push origin "$BRANCH"; then
     log "Retry push succeeded."
+else
+    # Do not die silently: a failure here means commits are accumulating
+    # locally, which is exactly how the August deadlock stayed invisible.
+    AHEAD=$(git rev-parse --count "origin/$BRANCH..HEAD" 2>/dev/null || echo '?')
+    log "ERROR: push failed twice. $AHEAD local commit(s) are unpushed."
+    log "Check connectivity/credentials, then: cd $REPO_DIR && "
+    log "  git pull --rebase origin $BRANCH && git push origin $BRANCH"
+    exit 1
 fi
