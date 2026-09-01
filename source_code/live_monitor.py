@@ -176,6 +176,27 @@ APEX_GATE_MAX_MIN = 360
 #   apex_gate  require converging lines with a near apex before signalling
 #   geometry   'envelope' fits upper/lower trendlines and writes a signals
 #              row; None logs the score only
+#   fit_bars   how many bars from the RIGHT EDGE to fit the envelope over.
+#              None = the whole window.
+#
+# fit_bars exists because a corpus with entry context puts a long directional
+# approach in front of the formation, and fitting across all 250 bars then
+# describes the approach rather than the wedge. Measured on the v3 corpus,
+# whole-window convergence correlates with the true value at r = -0.074;
+# fitting the last 120 bars recovers r = +0.510, against a +0.593 ceiling from
+# knowing the true start exactly.
+#
+# 120 is used rather than an estimated start because every estimator tried
+# lost to it: searching candidate starts gave 48-55 bars median error, and
+# anchoring the fit at the right edge and extrapolating backward gave 19 --
+# all worse than the fixed window's 15, because a converging wedge's lines
+# diverge going backward into a funnel that price rarely escapes.
+#
+# It stays None for the CURRENTLY DEPLOYED models: v2 wedges and channels were
+# trained on a corpus whose formation fills 30-85% of the window with only
+# structureless padding in front, so whole-window fitting is roughly right for
+# them. Setting 120 here before v3's weights are deployed would mis-measure
+# the model actually running.
 #   log_only   True records detections but never raises signal=1 -- the
 #              formation is being collected for study, not acted on
 #
@@ -203,18 +224,23 @@ APEX_GATE_MAX_MIN = 360
 # through the two troughs, and that needs a dedicated fitter. Logging envelope
 # slopes under a mid_travel column would be quietly wrong data.
 FORMATIONS = {
+    # fit_bars -> 120 when the v3 weights replace these (see notes above)
     'wedge':      {'windows': (50, 250), 'run_dir': 'runs',
                    'threshold': 0.8, 'apex_gate': True,
-                   'geometry': 'envelope', 'log_only': False},
+                   'geometry': 'envelope', 'log_only': False,
+                   'fit_bars': None},
     'channel':    {'windows': (250,),    'run_dir': 'runs_channel',
                    'threshold': 0.9, 'apex_gate': False,
-                   'geometry': 'envelope', 'log_only': False},
+                   'geometry': 'envelope', 'log_only': False,
+                   'fit_bars': None},
     'hs':         {'windows': (250,),    'run_dir': 'runs_hs',
                    'threshold': 0.9, 'apex_gate': False,
-                   'geometry': None,      'log_only': True},
+                   'geometry': None,      'log_only': True,
+                   'fit_bars': None},
     'inverse_hs': {'windows': (250,),    'run_dir': 'runs_inverse_hs',
                    'threshold': 0.9, 'apex_gate': False,
-                   'geometry': None,      'log_only': True},
+                   'geometry': None,      'log_only': True,
+                   'fit_bars': None},
 }
 
 
@@ -764,11 +790,19 @@ def _wedge_stats(window_deque: deque, score: Optional[float],
         return dict(_ZERO_STATS)
 
     from classify_wedge import fit_wedge_lines
-    arr = np.array(window_deque, dtype=np.float32)      # raw (n_bars, 5)
+    full = np.array(window_deque, dtype=np.float32)     # raw (n_bars, 5)
+
+    # Fit the envelope over the right-hand fit_bars only (see FORMATIONS).
+    # A corpus with entry context puts a long approach in front of the
+    # formation, and fitting across the whole window then measures the
+    # approach instead. Clamped to the window, so a 50-bar model is
+    # unaffected however fit_bars is set.
+    fb  = FORMATIONS[pattern].get('fit_bars')
+    arr = full if not fb else full[-min(int(fb), full.shape[0]):]
     g   = fit_wedge_lines(arr)
     n   = arr.shape[0]
 
-    close      = float(arr[-1, 3])
+    close      = float(full[-1, 3])
     travel_mid = (g['travel_upper'] + g['travel_lower']) / 2.0
 
     # Projected move: the PROJ_* fit was estimated on WEDGE events only
