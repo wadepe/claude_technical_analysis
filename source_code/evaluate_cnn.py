@@ -46,6 +46,9 @@ import tensorflow as tf
 from tensorflow import keras
 
 from cnn_model import build_model, FEATURE_COLS, N_BARS, N_FEATURES
+# Split fractions come from train_cnn so the eval boundary can never drift
+# from the boundary training actually used.
+from train_cnn import TRAIN_FRAC, VAL_FRAC
 
 
 # =============================================================================
@@ -247,8 +250,10 @@ def main() -> None:
     parser.add_argument('--data-dir',   default='..', help='Project root directory')
     parser.add_argument('--weights',    default=None,
                         help='Weights file (default: ../models/cnn_best.weights.h5)')
-    parser.add_argument('--eval-start', type=int, default=400_000,
-                        help='First manifest shuffled_idx in the eval set (default: 400,000)')
+    parser.add_argument('--eval-start', type=int, default=None,
+                        help='First manifest shuffled_idx in the eval set '
+                             '(default: derived from the corpus size -- the '
+                             'same train+val boundary train_cnn.py used)')
     parser.add_argument('--threshold',  type=float, default=0.5,
                         help='Decision threshold for binary prediction (default: 0.5)')
     parser.add_argument('--batch-size', type=int, default=256)
@@ -276,7 +281,26 @@ def main() -> None:
         manifest = json.load(fh)
     manifest.sort(key=lambda e: e['shuffled_idx'])
 
-    eval_entries = manifest[args.eval_start:]
+    # The train/val/eval split is FRACTIONAL (train_cnn.py slices the shuffled
+    # manifest at TRAIN_FRAC and TRAIN_FRAC+VAL_FRAC), so the eval boundary
+    # moves with corpus size. The old default of 400,000 was an absolute index
+    # from the 500K v1 corpus and silently leaks training data into the eval
+    # set on every other corpus: on the 700K v3 corpus it made 53% of the eval
+    # set contaminated, and on a 1M corpus it would be 67%. Derive it instead.
+    boundary   = int(len(manifest) * (TRAIN_FRAC + VAL_FRAC))
+    eval_start = args.eval_start
+    if eval_start is None:
+        eval_start = boundary
+        print(f'  eval-start derived from corpus size: {eval_start:,} '
+              f'(of {len(manifest):,} entries)')
+    elif eval_start < boundary:
+        leaked = boundary - eval_start
+        print(f'  WARNING: --eval-start {eval_start:,} is below the train+val '
+              f'boundary {boundary:,} -- {leaked:,} training/validation '
+              f'windows ({leaked/(len(manifest)-eval_start)*100:.0f}% of this '
+              f'eval set) are CONTAMINATED.')
+
+    eval_entries = manifest[eval_start:]
     n_eval       = len(eval_entries)
     wedge_count  = sum(1 for e in eval_entries if e['label'] == 1)
     noise_count  = n_eval - wedge_count

@@ -29,8 +29,13 @@ from pathlib import Path
 import numpy as np
 
 from cnn_model import build_model
+from train_cnn import TRAIN_FRAC, VAL_FRAC
 
-EVAL_FRAC  = 0.80          # eval set = last 20% of the shuffled manifest
+# eval set = whatever training did not use. Imported rather than hardcoded so
+# it can never disagree with evaluate_cnn.py's slice: the assert below checks
+# this against a cache built there, and a drifting constant would surface a
+# real contamination bug as a confusing shape mismatch instead.
+EVAL_FRAC  = TRAIN_FRAC + VAL_FRAC
 THRESHOLDS = [0.5, 0.6, 0.7, 0.8, 0.9, 0.95]
 
 
