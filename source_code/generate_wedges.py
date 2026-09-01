@@ -81,6 +81,7 @@ SEED_OFFSETS = {
     'channel':       2_000_000,
     'megaphone':     3_000_000,
     'stale_wedge':   4_000_000,
+    'compression_walk': 13_000_000,
     # peak-family formations (head and shoulders and its confusions)
     'hs':               5_000_000,
     'inverse_hs':       6_000_000,
@@ -118,7 +119,86 @@ MIN_END_WIDTH            = 0.018          # absolute floor so the apex never pin
                                           # below the noise scale
 
 # Visible pattern length as a fraction of the window (all anchored families)
-PATTERN_LEN_FRAC = (0.30, 0.85)
+PATTERN_LEN_FRAC = ((0.36, 0.60) if os.environ.get('WEDGE_ENTRY_CONTEXT') == '1'
+                    else (0.30, 0.85))
+
+# -- v3: entry context --------------------------------------------------------
+# A real formation is ENTERED: price arrives from outside the eventual
+# trendlines and only then becomes bounded by them. A rising wedge is entered
+# from below (it decelerates a prior advance), a falling wedge from above.
+#
+# v2 had no such structure -- _bridge_prepad starts at the formation entry
+# price and random-walks backwards, so every positive was a formation already
+# bounded by its lines with undifferentiated noise in front. Reviewing 20 real
+# detections showed the cost: the detector scored 0.94-0.99 on plain uptrends,
+# never having been shown what entering a formation looks like.
+#
+# Applied to ALL anchored families. Giving positives a structured approach
+# while negatives keep the old bridge would teach "has an approach" rather
+# than "is a wedge".
+#
+# With this on, PATTERN_LEN_FRAC targets 1.5-2.5 hour formations at 250 bars
+# (90-150 bars) leaving 100-160 bars of approach.
+ENTRY_CONTEXT    = os.environ.get('WEDGE_ENTRY_CONTEXT') == '1'
+ENTRY_OFFSET_RNG = (0.35, 1.10)   # how far outside the boundary, x start width
+ENTRY_CURVE_RNG  = (0.8, 2.2)     # approach shape; >1 converges late
+ENTRY_TRAVEL_CAP = 1.60           # cap on backward extrapolation, x start width
+
+# -- v4: volatility profile on EVERY family -----------------------------------
+# v3 gave decaying volatility only to compression_walk and left positives
+# stationary, making decay a near-perfect negative marker. The model learned
+# "quiet = not a wedge" and collapsed to 3 events/year, selecting for
+# compression harder than v2: median detection compression 0.284 against a
+# population median of 0.964. That is backwards -- the midday lull is when
+# participation pauses and consolidation genuinely happens.
+#
+# Drawing the SAME profile distribution for every family removes the label
+# information while keeping the shape, so the model must separate a quiet
+# window WITH boundary structure from a quiet one without.
+VOL_PROFILE      = os.environ.get('WEDGE_VOL_PROFILE') == '1'
+VOL_DECAY_PROB   = 0.75            # share of windows that go quiet
+VOL_DECAY_RNG    = (0.20, 0.55)    # end/start sigma ratio when decaying
+VOL_RISE_RNG     = (1.20, 3.00)    # ... and when building
+VOL_CURVE_RNG    = (0.70, 1.80)
+
+# -- v4: overnight gaps -------------------------------------------------------
+# The corpus is continuous; real 250-bar windows are stitched across session
+# boundaries and 64% contain an overnight jump. Measured on SPY 2008-2021
+# regular-session bars (3,346 gaps) that jump is large relative to what the
+# window otherwise shows: median 0.466 of the prior 250-bar RANGE, mean 0.630,
+# p90 1.366, and 19% exceed the whole range.
+#
+# v3 responds to it in the wrong direction: 0.108% detection rate on
+# gap-spanning windows against 0.019% gap-free, so 5x more likely to fire
+# where a discontinuity sits in the approach it now treats as structure.
+#
+# GAP_PROB is not free: a 250-bar window inside a 390-bar session contains a
+# boundary whenever it ends before session minute 249, i.e. 249/390 = 0.638,
+# and the boundary lands uniformly across the window.
+GAPS             = os.environ.get('WEDGE_GAPS') == '1'
+GAP_PROB         = 0.638
+GAP_LOGNORM      = (-0.76, 0.85)   # mu, sigma of ln(gap / window range)
+GAP_MAX_REL      = 3.0             # clip the tail; p99 measured at 2.687
+GAP_UP_PROB      = 0.54            # measured: 54% up, 45% down
+
+# -- v4: price roughness ------------------------------------------------------
+# Measured on 1,500 random SPY 250-bar windows vs 400 synthetic ones, the
+# corpus was markedly smoother than reality on every texture metric:
+#
+#                     bar step   bar range   wiggle
+#   real SPY            0.0283      0.0531     14.1
+#   forming_wedge       0.0177      0.0295      5.6
+#   walk                0.0135      0.0238      4.9
+#
+# (bar step and range as a fraction of the window range; wiggle = path length
+# over net travel, so 14.1 means real price covers fourteen times the ground
+# it nets.) Every model so far learned formations against a smoother world
+# than it is asked to work in.
+#
+# WIDENED rather than shifted: SPY is an ETF and among the smoothest
+# instruments there is, so a corpus meant to generalise past it needs headroom
+# above SPY texture, not a distribution centred on it.
+NOISE_SIGMA_RNG = (0.010, 0.042)
 
 # ── Which family carries label=1 ──────────────────────────────────────────────
 # 'forming_wedge' reproduces the v2 wedge corpus exactly. 'channel' builds the
@@ -149,6 +229,50 @@ CHANNEL_TOUCH_RETRIES    = 6
 # =============================================================================
 # Shared price/candle machinery (adapted from the v1 generator)
 # =============================================================================
+
+def _vol_profile(rng, n: int, base_sigma: float) -> np.ndarray:
+    """
+    Per-bar volatility across a window. Identical distribution for every
+    family, so the profile carries no label information (see VOL_PROFILE).
+    Returns a constant array when the feature is off, so callers are uniform.
+    """
+    if not VOL_PROFILE or n <= 0:
+        return np.full(max(n, 0), base_sigma)
+    ratio = (rng.uniform(*VOL_DECAY_RNG) if rng.random() < VOL_DECAY_PROB
+             else rng.uniform(*VOL_RISE_RNG))
+    curve = rng.uniform(*VOL_CURVE_RNG)
+    scale = np.linspace(1.0, 0.0, n) ** curve
+    return base_sigma * (ratio + (1.0 - ratio) * scale)
+
+
+def _apply_gap(rng, closes: np.ndarray, *extra) -> tuple:
+    """
+    Insert one overnight gap: a level shift from a random bar to the end of
+    the window. `extra` arrays (trendlines) shift identically, so a formation
+    straddling the boundary stays inside its own lines -- which is how the
+    lines would be drawn on a real gapped chart.
+
+    Returns everything unchanged when the feature is off or no gap is drawn,
+    so roughly a third of windows stay continuous and the gap carries no
+    label information.
+    """
+    if not GAPS or len(closes) < 10 or rng.random() >= GAP_PROB:
+        return (closes, *extra)
+    span = float(np.nanmax(closes) - np.nanmin(closes))
+    if span <= 1e-9:
+        return (closes, *extra)
+    mu, sd = GAP_LOGNORM
+    rel = min(float(np.exp(rng.normal(mu, sd))), GAP_MAX_REL)
+    amt = rel * span * (1.0 if rng.random() < GAP_UP_PROB else -1.0)
+    p = int(rng.randint(1, len(closes)))          # boundary lands uniformly
+    out = [closes.copy()]
+    out[0][p:] += amt
+    for a in extra:
+        b = a.copy()
+        b[p:] += amt
+        out.append(b)
+    return tuple(out)
+
 
 def _garch_step(rng, vol_t: float, base_sigma: float, persist: float,
                 fat_prob: float, fat_mult: float) -> tuple[float, float]:
@@ -182,10 +306,12 @@ def _channel_closes(rng, n: int, lower: np.ndarray, upper: np.ndarray,
     slope  = np.diff(mid, prepend=mid[0])
     closes = np.empty(n)
     closes[0] = lower[0] + (upper[0] - lower[0]) * rng.uniform(0.30, 0.70)
-    vol_t = noise_sigma
+    sig_arr = (np.full(n, noise_sigma) if np.isscalar(noise_sigma)
+               else np.asarray(noise_sigma, dtype=float))
+    vol_t = float(sig_arr[0])
 
     for i in range(1, n):
-        vol_t, step = _garch_step(rng, vol_t, noise_sigma, vol_persist,
+        vol_t, step = _garch_step(rng, vol_t, sig_arr[i], vol_persist,
                                   fat_prob, fat_mult)
         mom = momentum_str * (closes[i-1] - closes[i-2]) if i >= 2 else 0.0
         tgt = 0 if touch_target is None else touch_target[i]
@@ -200,14 +326,14 @@ def _channel_closes(rng, n: int, lower: np.ndarray, upper: np.ndarray,
         # Boundary handling: reject back inside, or occasionally poke through
         if closes[i] > upper[i]:
             if rng.random() < violation_prob:
-                closes[i] = upper[i] + abs(rng.normal(0, noise_sigma * 0.40))
+                closes[i] = upper[i] + abs(rng.normal(0, sig_arr[i] * 0.40))
             else:
-                closes[i] = upper[i] - abs(rng.normal(0, noise_sigma * 0.15))
+                closes[i] = upper[i] - abs(rng.normal(0, sig_arr[i] * 0.15))
         elif closes[i] < lower[i]:
             if rng.random() < violation_prob:
-                closes[i] = lower[i] - abs(rng.normal(0, noise_sigma * 0.40))
+                closes[i] = lower[i] - abs(rng.normal(0, sig_arr[i] * 0.40))
             else:
-                closes[i] = lower[i] + abs(rng.normal(0, noise_sigma * 0.15))
+                closes[i] = lower[i] + abs(rng.normal(0, sig_arr[i] * 0.15))
     return closes
 
 
@@ -309,6 +435,46 @@ def _bridge_prepad(rng, n: int, target: float, sigma: float,
     return trend + (walk - np.linspace(0, walk[-1], n))
 
 
+def _approach_prepad(rng, n: int, m_low: float, m_up: float,
+                     low0: float, up0: float, entry: float, m_mid: float,
+                     p: dict) -> np.ndarray:
+    """
+    Price approaching the formation from OUTSIDE its boundaries.
+
+    The formation trendlines are extrapolated backwards over the approach.
+    Price tracks just outside the relevant one -- below for a rising
+    formation, above for a falling one, either side for a flat one -- closing
+    that gap as it nears the start, so it crosses in where the formation
+    begins.
+
+    Total travel is capped at ENTRY_TRAVEL_CAP x the start width: without it a
+    steep formation extrapolated back over 160 bars produces an approach that
+    dominates the window and squashes the formation after normalisation.
+    """
+    if n == 0:
+        return np.array([])
+
+    k = np.arange(-n, 0, dtype=float)
+    width0 = max(up0 - low0, 1e-9)
+    side = ((1.0 if rng.random() < 0.5 else -1.0) if abs(m_mid) < 1e-9
+            else (-1.0 if m_mid > 0 else 1.0))
+    slope = m_low if side < 0 else m_up
+    anchor = low0 if side < 0 else up0
+    boundary = anchor + slope * k
+    cap = ENTRY_TRAVEL_CAP * width0
+    boundary = np.clip(boundary, anchor - cap, anchor + cap)
+
+    d0 = rng.uniform(*ENTRY_OFFSET_RNG) * width0
+    curve = rng.uniform(*ENTRY_CURVE_RNG)
+    offs = d0 * np.linspace(1.0, 0.0, n) ** curve
+    skel = boundary + side * offs
+    skel = skel + (entry - skel[-1]) * np.linspace(0.0, 1.0, n)
+
+    return _skeleton_closes(rng, skel, p['noise_sigma'], p['rev_strength'],
+                            p['momentum_str'], p['vol_persist'],
+                            p['fat_prob'], p['fat_mult'])
+
+
 def _ohlc_from_closes(rng, closes: np.ndarray, noise_sigma: float
                       ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Opens/highs/lows around a close series: gaps, pin bars, variable wicks."""
@@ -403,7 +569,7 @@ def _assemble(rng, closes: np.ndarray, noise_sigma: float, vols: np.ndarray,
 
 def _shared_realism_params(rng) -> dict:
     return dict(
-        noise_sigma    = rng.uniform(0.006, 0.022),
+        noise_sigma    = rng.uniform(*NOISE_SIGMA_RNG),
         rev_strength   = rng.uniform(0.08, 0.18),
         momentum_str   = rng.uniform(0.05, 0.20),
         vol_persist    = rng.uniform(0.40, 0.75),
@@ -461,11 +627,18 @@ def _anchored_pattern(dataset_idx: int, family: str) -> tuple[pd.DataFrame, dict
     # Channel positives must visibly touch both boundaries at least twice, or
     # the lines are not drawable (see CHANNEL_TOUCHES_REQUIRED). Retry with a
     # fresh touch schedule; keep the best attempt if none fully satisfies.
-    enforce = (family == 'channel' and POSITIVE_FAMILY == 'channel')
+    # Touches are required of whichever family is the POSITIVE class: a
+    # formation you cannot draw the lines from is not that formation. This was
+    # channel-only until v3, which let wedge positives converge without price
+    # ever riding either boundary -- the loophole that let the detector score
+    # plain narrowing as a wedge.
+    enforce = (family == POSITIVE_FAMILY
+               and family in ('channel', 'forming_wedge'))
     n_touch_up = n_touch_lo = None
+    sig_pat = _vol_profile(rng, n_vis, p['noise_sigma'])
     if not enforce:
         closes_pat = _channel_closes(
-            rng, n_vis, lower, upper, p['noise_sigma'], p['rev_strength'],
+            rng, n_vis, lower, upper, sig_pat, p['rev_strength'],
             p['momentum_str'], p['vol_persist'], p['fat_prob'], p['fat_mult'],
             p['violation_prob'],
         )
@@ -474,7 +647,7 @@ def _anchored_pattern(dataset_idx: int, family: str) -> tuple[pd.DataFrame, dict
         for _ in range(CHANNEL_TOUCH_RETRIES):
             target, _, _ = _plan_touches(rng, n_vis)
             cand = _channel_closes(
-                rng, n_vis, lower, upper, p['noise_sigma'], p['rev_strength'],
+                rng, n_vis, lower, upper, sig_pat, p['rev_strength'],
                 p['momentum_str'], p['vol_persist'], p['fat_prob'],
                 p['fat_mult'], p['violation_prob'], touch_target=target,
             )
@@ -489,9 +662,18 @@ def _anchored_pattern(dataset_idx: int, family: str) -> tuple[pd.DataFrame, dict
         else:
             closes_pat, n_touch_up, n_touch_lo = best
 
-    pre = _bridge_prepad(rng, pre_pad, closes_pat[0],
-                         p['noise_sigma'] * rng.uniform(0.70, 1.20),
-                         p['fat_prob'], p['fat_mult'])
+    # The approach. With ENTRY_CONTEXT the window shows price arriving from
+    # OUTSIDE the formation boundaries and crossing in where it begins;
+    # without it, v2's context-free bridge.
+    m_half_pre = (w_end - w0) / (2.0 * max(n_vis - 1, 1))
+    if ENTRY_CONTEXT:
+        pre = _approach_prepad(rng, pre_pad,
+                               m_mid - m_half_pre, m_mid + m_half_pre,
+                               lower[0], upper[0], closes_pat[0], m_mid, p)
+    else:
+        pre = _bridge_prepad(rng, pre_pad, closes_pat[0],
+                             p['noise_sigma'] * rng.uniform(0.70, 1.20),
+                             p['fat_prob'], p['fat_mult'])
     closes = np.concatenate([pre, closes_pat])
 
     # ~75% of wedges fade volume, ~40% of channel-family negatives do too
@@ -505,6 +687,10 @@ def _anchored_pattern(dataset_idx: int, family: str) -> tuple[pd.DataFrame, dict
     upper_full[pre_pad:] = upper
     segment = np.zeros(TOTAL_BARS, dtype=np.int8)
     segment[pre_pad:] = 1
+    # trendlines shift with price so a formation straddling the boundary
+    # stays inside its own lines
+    closes, lower_full, upper_full = _apply_gap(rng, closes, lower_full,
+                                                upper_full)
 
     label = 1 if family == POSITIVE_FAMILY else 0
     df = _assemble(rng, closes, p['noise_sigma'], vols,
@@ -683,11 +869,13 @@ def _skeleton_closes(rng, skeleton, noise_sigma, rev_strength, momentum_str,
                      vol_persist, fat_prob, fat_mult):
     """Mean-reverting noise around a price skeleton (peak families)."""
     n = len(skeleton)
+    sig_arr = (np.full(n, noise_sigma) if np.isscalar(noise_sigma)
+               else np.asarray(noise_sigma, dtype=float))
     closes = np.empty(n)
     closes[0] = skeleton[0]
-    vol_t = noise_sigma
+    vol_t = float(sig_arr[0])
     for i in range(1, n):
-        vol_t, step = _garch_step(rng, vol_t, noise_sigma, vol_persist,
+        vol_t, step = _garch_step(rng, vol_t, sig_arr[i], vol_persist,
                                   fat_prob, fat_mult)
         mom = momentum_str * (closes[i-1] - closes[i-2]) if i >= 2 else 0.0
         rev = rev_strength * (skeleton[i-1] - closes[i-1])
@@ -716,7 +904,7 @@ def generate_peak_pattern(dataset_idx: int, family: str):
     pre_pad = TOTAL_BARS - n_vis - (post if stale else 0)
 
     skeleton, neckline, m = _peak_skeleton(rng, n_vis, build)
-    hs_sigma = p['noise_sigma'] * HS_NOISE_SCALE
+    hs_sigma = _vol_profile(rng, n_vis, p['noise_sigma'] * HS_NOISE_SCALE)
     closes_pat = _skeleton_closes(rng, skeleton, hs_sigma,
                                   rng.uniform(*HS_REV_STRENGTH_RNG),
                                   p['momentum_str'],
@@ -770,6 +958,7 @@ def generate_peak_pattern(dataset_idx: int, family: str):
                              fading, p['vol_spike_prob'])
 
     label = 1 if family == POSITIVE_FAMILY else 0
+    closes, lower_full, upper_full = _apply_gap(rng, closes, lower_full, upper_full)
     df = _assemble(rng, closes, p['noise_sigma'], vols,
                    lower_full, upper_full, segment, label)
 
@@ -826,7 +1015,8 @@ def generate_stale_wedge(dataset_idx: int) -> tuple[pd.DataFrame, dict]:
     upper  = mids + widths / 2.0
 
     closes_w = _channel_closes(
-        rng, n_wedge, lower, upper, p['noise_sigma'], p['rev_strength'],
+        rng, n_wedge, lower, upper,
+        _vol_profile(rng, n_wedge, p['noise_sigma']), p['rev_strength'],
         p['momentum_str'], p['vol_persist'], p['fat_prob'], p['fat_mult'],
         p['violation_prob'],
     )
@@ -849,9 +1039,18 @@ def generate_stale_wedge(dataset_idx: int) -> tuple[pd.DataFrame, dict]:
                                                      * rng.uniform(0.6, 1.1))
         closes_b[i] = prev
 
-    pre  = _bridge_prepad(rng, pre_pad, closes_w[0],
-                          p['noise_sigma'] * rng.uniform(0.70, 1.20),
-                          p['fat_prob'], p['fat_mult'])
+    # A stale wedge was also entered from somewhere; leaving it the only
+    # anchored family without an approach would reintroduce the leak
+    # ENTRY_CONTEXT exists to close.
+    if ENTRY_CONTEXT:
+        m_half_pre = (w_end - w0) / (2.0 * max(n_wedge - 1, 1))
+        pre = _approach_prepad(rng, pre_pad,
+                               m_mid - m_half_pre, m_mid + m_half_pre,
+                               lower[0], upper[0], closes_w[0], m_mid, p)
+    else:
+        pre = _bridge_prepad(rng, pre_pad, closes_w[0],
+                             p['noise_sigma'] * rng.uniform(0.70, 1.20),
+                             p['fat_prob'], p['fat_mult'])
     post = closes_b[-1] + np.cumsum(_fat_walk(rng, post_pad,
                                               p['noise_sigma'] * rng.uniform(0.70, 1.20),
                                               p['fat_prob'], p['fat_mult']))
@@ -868,6 +1067,7 @@ def generate_stale_wedge(dataset_idx: int) -> tuple[pd.DataFrame, dict]:
     segment[pre_pad:pre_pad + n_wedge] = 1
     segment[pre_pad + n_wedge:pre_pad + n_wedge + n_break] = 2
 
+    closes, lower_full, upper_full = _apply_gap(rng, closes, lower_full, upper_full)
     df = _assemble(rng, closes, p['noise_sigma'], vols,
                    lower_full, upper_full, segment, label=0)
     meta = {
@@ -885,6 +1085,73 @@ def generate_stale_wedge(dataset_idx: int) -> tuple[pd.DataFrame, dict]:
 # Random walk (v1-compatible dynamics, same seed offset)
 # =============================================================================
 
+def generate_compression_walk(dataset_idx: int) -> tuple[pd.DataFrame, dict]:
+    """
+    A trending random walk whose VOLATILITY AND DRIFT decay through the window.
+
+    The key negative in v3+. Scanning SPY 2008-2021 showed the v2 detector
+    firing on the trading day rather than on geometry: detection rate tracked
+    the intraday range-compression curve, peaking at 27.2% where windows are
+    most compressed (session minute 210-240, ratio 0.599) and collapsing to
+    0.12% at the open and close where windows widen. Per-bar range runs 0.1305
+    at the open, troughs at 0.0756 near midday and rises to 0.1218 into the
+    close, so an open-to-lunch window has wide bars early and narrow bars
+    late, which fit_wedge_lines reads as a converging envelope.
+
+    This family is that shape with NO formation: a walk that simply goes
+    quiet, giving a converging fitted envelope while price wanders
+    mid-channel instead of riding either boundary.
+
+    Drift decays on the same envelope as volatility. Decaying volatility ALONE
+    barely compresses the range because drift keeps carrying price; the real
+    open-to-lunch confound loses both at once.
+    """
+    rng = np.random.RandomState(SEED_OFFSETS['compression_walk'] + dataset_idx)
+
+    drift        = rng.uniform(-0.004, 0.004) * _SCALE
+    base_sigma   = rng.uniform(*NOISE_SIGMA_RNG)
+    fat_prob     = rng.uniform(0.04, 0.10)
+    fat_mult     = rng.uniform(2.5, 5.0)
+    momentum_str = rng.uniform(0.05, 0.25)
+    vol_persist  = rng.uniform(0.45, 0.80)
+
+    ratio = (rng.uniform(*VOL_DECAY_RNG) if rng.random() < VOL_DECAY_PROB
+             else rng.uniform(*VOL_RISE_RNG))
+    curve = rng.uniform(*VOL_CURVE_RNG)
+    scale = np.linspace(1.0, 0.0, TOTAL_BARS) ** curve
+    sigma_t = base_sigma * (ratio + (1.0 - ratio) * scale)
+    drift_t = drift * (ratio + (1.0 - ratio) * scale)
+
+    closes    = np.empty(TOTAL_BARS)
+    closes[0] = rng.uniform(0.25, 0.75)
+    vol_t     = float(sigma_t[0])
+    momentum  = 0.0
+    for i in range(1, TOTAL_BARS):
+        vol_t, step = _garch_step(rng, vol_t, sigma_t[i], vol_persist,
+                                  fat_prob, fat_mult)
+        momentum = (momentum_str * (closes[i-1] - closes[i-2])
+                    + 0.3 * momentum) if i >= 2 else 0.0
+        closes[i] = closes[i-1] + drift_t[i] + momentum + step
+
+    abs_moves = np.abs(np.diff(closes, prepend=closes[0]))
+    vol_base  = rng.uniform(0.4, 0.9)
+    vols      = vol_base + rng.uniform(0.3, 0.7) * (abs_moves / (abs_moves.max() + 1e-10))
+    vols     += np.abs(rng.normal(0, vol_base * 0.25, TOTAL_BARS))
+    vols      = np.abs(vols)
+
+    (closes,) = _apply_gap(rng, closes)
+    df = _assemble(rng, closes, base_sigma, vols,
+                   np.full(TOTAL_BARS, np.nan), np.full(TOTAL_BARS, np.nan),
+                   np.zeros(TOTAL_BARS, dtype=np.int8), label=0)
+    meta = {
+        'dataset_idx': dataset_idx, 'family': 'compression_walk', 'label': 0,
+        'total_bars': TOTAL_BARS, 'vol_ratio': round(ratio, 4),
+        'vol_curve': round(curve, 3), 'drift': round(drift, 6),
+        'noise_sigma': round(base_sigma, 4),
+    }
+    return df, meta
+
+
 def generate_walk(dataset_idx: int) -> tuple[pd.DataFrame, dict]:
     rng = np.random.RandomState(SEED_OFFSETS['walk'] + dataset_idx)
 
@@ -892,18 +1159,19 @@ def generate_walk(dataset_idx: int) -> tuple[pd.DataFrame, dict]:
     drift  = [rng.uniform(-0.001, 0.001),
               rng.uniform(0.001, 0.005),
               rng.uniform(-0.005, -0.001)][regime]
-    base_sigma   = rng.uniform(0.006, 0.022)
+    base_sigma   = rng.uniform(*NOISE_SIGMA_RNG)
     fat_prob     = rng.uniform(0.04, 0.10)
     fat_mult     = rng.uniform(2.5, 5.0)
     momentum_str = rng.uniform(0.05, 0.25)
     vol_persist  = rng.uniform(0.45, 0.80)
 
+    sig_t     = _vol_profile(rng, TOTAL_BARS, base_sigma)
     closes    = np.empty(TOTAL_BARS)
     closes[0] = rng.uniform(0.20, 0.80)
-    vol_t     = base_sigma
+    vol_t     = float(sig_t[0])
     momentum  = 0.0
     for i in range(1, TOTAL_BARS):
-        vol_t, step = _garch_step(rng, vol_t, base_sigma, vol_persist,
+        vol_t, step = _garch_step(rng, vol_t, sig_t[i], vol_persist,
                                   fat_prob, fat_mult)
         momentum = (momentum_str * (closes[i-1] - closes[i-2])
                     + 0.3 * momentum) if i >= 2 else 0.0
@@ -915,6 +1183,7 @@ def generate_walk(dataset_idx: int) -> tuple[pd.DataFrame, dict]:
     vols     += np.abs(rng.normal(0, vol_base * 0.25, TOTAL_BARS))
     vols      = np.abs(vols)
 
+    (closes,) = _apply_gap(rng, closes)
     df = _assemble(rng, closes, base_sigma, vols,
                    np.full(TOTAL_BARS, np.nan), np.full(TOTAL_BARS, np.nan),
                    np.zeros(TOTAL_BARS, dtype=np.int8), label=0)
@@ -938,6 +1207,8 @@ def generate(family: str, dataset_idx: int) -> tuple[pd.DataFrame, dict]:
         return generate_stale_wedge(dataset_idx)
     if family == 'walk':
         return generate_walk(dataset_idx)
+    if family == 'compression_walk':
+        return generate_compression_walk(dataset_idx)
     if family in PEAK_FAMILIES:
         return generate_peak_pattern(dataset_idx, family)
     raise ValueError(f'unknown family {family!r}')
