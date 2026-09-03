@@ -18,7 +18,8 @@ Behaviour
   - Scores only regular-session bars, 9:30 AM-4:00 PM ET: extended-hours bars
     carry zero volume from yfinance and are off-distribution for the models
     (see the regular-session gate notes below; --score-extended-hours overrides)
-  - Maintains rolling windows of 50 and 250 bars of regular-session bars,
+  - Maintains a rolling window of 250 regular-session bars (wedge dropped its
+    50-bar model at v5; every formation is 250-bar now),
     stitched across days (filled from the database on restart)
   - Normalises each window and scores it with the matching CNN model
   - Writes bar + scores + signal geometry atomically, one transaction/minute
@@ -29,12 +30,17 @@ Output
     bars(ts, open, high, low, close, volume)     every accepted bar
     scores(ts, window, score, signal, bars)      regular-session bars only
     signals(ts, window, proj_move_usd, slope_upper, slope_lower,
-            apex_min, apex_price, mid_travel)    rows exist only where
+            apex_min, apex_price, mid_travel, convergence,
+            touch_up, touch_lo, max_excursion)   rows exist only where
                                                  signal = 1
-    (signal = 1 when score >= threshold AND the apex gate passes: converging
-     lines with apex <= APEX_GATE_MAX_MIN ahead or already crossed. A scores
-     row with a high score and signal = 0 was suppressed by the geometry
-     gate. For the meaning of the geometry columns see _wedge_stats.)
+    (signal = 1 when score >= threshold AND both geometry gates pass: the apex
+     gate — converging lines with apex <= APEX_GATE_MAX_MIN ahead or already
+     crossed — and, for v5 wedges, the QUALITY gate, which rejects diverging
+     envelopes, near-parallel channels, lines that never touch the price, and
+     large breaches. A scores row with a high score and signal = 0 was
+     suppressed by one of those; the quality columns are written on every
+     signalling bar so which one can be told apart afterwards. 61.8% of raw v5
+     detections over SPY 2008-2021 fail the quality gate. See _wedge_stats.)
 
   On first start after the CSV era, an empty database is populated
   automatically from spy_data_1min.csv / rising_wedge.csv if they exist
@@ -164,6 +170,19 @@ PROJ_TRAVEL_COEF   = -0.146
 # the 20% whose geometry is channel-like rather than wedge-like.
 APEX_GATE_MAX_MIN = 360
 
+# -- v5 quality gate ----------------------------------------------------------
+# The v5 model is a far better detector than v2/v3/v4, but 61.8% of what it
+# fires on over SPY 2008-2021 is not a wedge: 18.5% diverging, 29.2%
+# near-parallel channels, 13.6% with the fitted line floating off the price
+# action entirely. These four tests reject those, and every threshold is
+# calibrated against the v5 corpus at fit_bars=100 rather than chosen by eye --
+# the first hand-picked excursion threshold was wrong by 8x and rejected 100%
+# of detections. Re-derive them if fit_bars changes.
+QUALITY_MIN_CONVERGENCE = 0.5    # below this the envelope is a channel
+QUALITY_MIN_TOUCHES     = 5      # per side; designed-wedge p10, walks reach 2
+QUALITY_MAX_EXCURSION   = 1.83   # mean-widths; designed-wedge p95 at fit_bars=100
+QUALITY_TOUCH_TOL_FRAC  = 0.18   # a touch is within this fraction of the width
+
 
 # ── Formation registry ────────────────────────────────────────────────────────
 # Every formation scored each minute. Adding one is an entry here plus its
@@ -224,11 +243,20 @@ APEX_GATE_MAX_MIN = 360
 # through the two troughs, and that needs a dedicated fitter. Logging envelope
 # slopes under a mid_travel column would be quietly wrong data.
 FORMATIONS = {
-    # fit_bars -> 120 when the v3 weights replace these (see notes above)
-    'wedge':      {'windows': (50, 250), 'run_dir': 'runs',
+    # v5 (deployed 2026-09-03). 250-bar only: the 50-bar model was never
+    # retrained past v2 and barely discriminated live anyway (median score 0.65
+    # against the 250-bar's 0.087, ~12 signal clusters/day), so running it
+    # alongside v5 would have been a v2/v5 hybrid.
+    #
+    # fit_bars is 100, NOT the 120 the v3-era note below anticipated. 120 was
+    # justified by r = +0.510 measured on the v3 corpus; on v4 that collapsed to
+    # +0.014, and re-deriving it on the v5 corpus gives 100 (r = +0.4707,
+    # against 0.3395 at 120 and negative past 140). It moves with the corpus and
+    # must be re-derived, never inherited.
+    'wedge':      {'windows': (250,),    'run_dir': 'runs',
                    'threshold': 0.8, 'apex_gate': True,
                    'geometry': 'envelope', 'log_only': False,
-                   'fit_bars': None},
+                   'quality_gate': True, 'fit_bars': 100},
     'channel':    {'windows': (250,),    'run_dir': 'runs_channel',
                    'threshold': 0.9, 'apex_gate': False,
                    'geometry': 'envelope', 'log_only': False,
@@ -827,7 +855,48 @@ def _wedge_stats(window_deque: deque, score: Optional[float],
         apex_price = float(g['a_upper'] + g['b_upper'] * x_cross)
         converging = ahead <= APEX_GATE_MAX_MIN         # near or already pinched
 
-    gate_ok = converging if FORMATIONS[pattern]['apex_gate'] else True
+    # Quality gate: is the thing we detected actually a wedge? Measured on the
+    # v5 detection study over SPY 2008-2021, 61.8% of detections failed one of
+    # these, so this is not a rounding-error filter -- it rejects most of them.
+    #
+    #   convergence < 0        a widening envelope is a megaphone
+    #   convergence < 0.5      near-parallel, i.e. a CHANNEL. Channels ride
+    #                          their rails perfectly, so the touch test cannot
+    #                          catch one -- this is the only test that can
+    #   touches < 5 per side   the line floats off the price action, anchored
+    #                          by a stray spike. Designed wedges reach 5/5/8 at
+    #                          p5/p10/median under this fit; random walks 2/2/5
+    #   max_excursion > 1.83   breached worse than 95% of designed wedges
+    #
+    # Every threshold is calibrated against the v5 corpus AT fit_bars=100, the
+    # value this formation deploys with. They move with the fit span: the 1.83
+    # here is 1.98 at fit_bars=120.
+    touch_up = touch_lo = max_exc = None
+    quality_ok = True
+    if FORMATIONS[pattern].get('quality_gate'):
+        xq = np.arange(n, dtype=float)
+        up = g['a_upper'] + g['b_upper'] * xq
+        lo = g['a_lower'] + g['b_lower'] * xq
+        width = up - lo
+        mw  = max(float(np.mean(np.abs(width))), 1e-12)
+        exc = np.maximum(np.maximum(arr[:, 1] - up, 0.0),
+                         np.maximum(lo - arr[:, 2], 0.0)) / mw
+        max_exc = float(exc.max())
+        tol = QUALITY_TOUCH_TOL_FRAC * np.abs(width)
+
+        def _runs(mask: np.ndarray) -> int:
+            m = mask.astype(np.int8)
+            return int(np.sum(m - np.concatenate([[0], m[:-1]]) == 1))
+
+        touch_up = _runs(arr[:, 1] >= up - tol)
+        touch_lo = _runs(arr[:, 2] <= lo + tol)
+        quality_ok = (g['convergence'] >= QUALITY_MIN_CONVERGENCE
+                      and touch_up >= QUALITY_MIN_TOUCHES
+                      and touch_lo >= QUALITY_MIN_TOUCHES
+                      and max_exc <= QUALITY_MAX_EXCURSION)
+
+    apex_ok = converging if FORMATIONS[pattern]['apex_gate'] else True
+    gate_ok = apex_ok and quality_ok
 
     return {
         'proj_move_usd': proj_move,
@@ -840,6 +909,12 @@ def _wedge_stats(window_deque: deque, score: Optional[float],
         # raw so slope-based interpretations (e.g. the observed "steep-rising
         # = quiet continuation" regime) can be evaluated on live data post-hoc.
         'mid_travel':    round(travel_mid, 4),
+        # Quality-gate inputs, recorded whether or not they passed, so a
+        # suppressed signal can be told apart from a monitor that stopped.
+        'convergence':   round(g['convergence'], 4),
+        'touch_up':      touch_up,
+        'touch_lo':      touch_lo,
+        'max_excursion': None if max_exc is None else round(max_exc, 4),
         'gate_ok':       gate_ok,
     }
 

@@ -63,7 +63,11 @@ PROJECT_ROOT = Path(__file__).parent.parent
 DB_PATH      = PROJECT_ROOT / 'wedge.db'
 
 STAT_KEYS = ['proj_move_usd', 'slope_upper', 'slope_lower',
-             'apex_min', 'apex_price', 'mid_travel']
+             'apex_min', 'apex_price', 'mid_travel',
+             # v5 quality gate inputs. Logged as well as gated on: a signal
+             # that stops firing is indistinguishable from a broken monitor
+             # unless the reason it was suppressed is recorded alongside it.
+             'convergence', 'touch_up', 'touch_lo', 'max_excursion']
 
 DEFAULT_PATTERN = 'wedge'      # what pre-migration rows are attributed to
 
@@ -136,6 +140,30 @@ def _migrate_add_pattern(con: sqlite3.Connection) -> None:
             con.execute(f'DROP TABLE {table}_old')
 
 
+def _add_missing_stat_columns(con: sqlite3.Connection) -> None:
+    """
+    Add any STAT_KEYS the existing signals table predates.
+
+    _SCHEMA is CREATE TABLE IF NOT EXISTS, so extending STAT_KEYS does NOT
+    reshape a table that already exists on a running server -- and the insert
+    builds its placeholder count from STAT_KEYS, so the next signal would fail
+    with a column-count mismatch and take the monitor down. This closes that
+    gap. ALTER TABLE ADD COLUMN is O(1) in SQLite and leaves existing rows with
+    NULL for the new column, which is the honest value: those signals were
+    raised before the measurement existed.
+    """
+    row = con.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='signals'"
+    ).fetchone()
+    if row is None:
+        return
+    have = {r[1] for r in con.execute('PRAGMA table_info(signals)')}
+    with con:
+        for k in STAT_KEYS:
+            if k not in have:
+                con.execute(f'ALTER TABLE signals ADD COLUMN {k} REAL')
+
+
 def connect(path: Path | str = DB_PATH, readonly: bool = False
             ) -> sqlite3.Connection:
     """
@@ -151,6 +179,7 @@ def connect(path: Path | str = DB_PATH, readonly: bool = False
         if _needs_pattern_migration(con):
             _migrate_add_pattern(con)
         con.executescript(_SCHEMA)
+        _add_missing_stat_columns(con)
     con.row_factory = sqlite3.Row
     return con
 
