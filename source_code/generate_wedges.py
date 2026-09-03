@@ -181,6 +181,30 @@ GAP_LOGNORM      = (-0.76, 0.85)   # mu, sigma of ln(gap / window range)
 GAP_MAX_REL      = 3.0             # clip the tail; p99 measured at 2.687
 GAP_UP_PROB      = 0.54            # measured: 54% up, 45% down
 
+# -- v5: the boundary stays in the APPROACH -----------------------------------
+# v4 placed the gap uniformly across the window, which corrupted 22% of its own
+# positives. Measured on 2,000 v4 forming_wedge windows: a gap at bar 130-199
+# faked extreme convergence (fitted compression 0.065 against a designed 0.367),
+# and one at 200-249 -- landing on the right-edge anchor the entire corpus design
+# rests on -- faked divergence, with 60.1% fitting as DIVERGING when none were
+# designed that way. Whole-corpus designed-vs-fitted correlation collapsed to
+# r = +0.014 (v3: +0.432), which also invalidated live_monitor's fit_bars=120.
+#
+# On a real chart a large gap inside a forming wedge breaks the formation -- it
+# stops being a forming wedge. _apply_gap instead shifts the trendlines with the
+# price so the formation "stays inside its own lines", producing a shape that
+# cannot occur in the data the model is deployed on.
+#
+# The cap is ONE constant applied to EVERY family, deliberately not each family's
+# own formation start. Constraining per-family would make the gap POSITION
+# distribution differ by label -- the same class of leak as the v3 volatility
+# profile, and in the worse direction: it would teach "late gap = positive".
+# 100 is the smallest pre_pad an anchored family can draw under ENTRY_CONTEXT
+# (n_vis <= int(0.60 * 250) = 150), so no forming_wedge, channel or megaphone
+# formation can contain a boundary. WEDGE_GAP_MAX_POS=250 restores v4's uniform
+# placement for reproduction; <= 0 also means unconstrained.
+GAP_MAX_POS      = int(os.environ.get('WEDGE_GAP_MAX_POS', '100'))
+
 # -- v4: price roughness ------------------------------------------------------
 # Measured on 1,500 random SPY 250-bar windows vs 400 synthetic ones, the
 # corpus was markedly smoother than reality on every texture metric:
@@ -247,31 +271,40 @@ def _vol_profile(rng, n: int, base_sigma: float) -> np.ndarray:
 
 def _apply_gap(rng, closes: np.ndarray, *extra) -> tuple:
     """
-    Insert one overnight gap: a level shift from a random bar to the end of
-    the window. `extra` arrays (trendlines) shift identically, so a formation
-    straddling the boundary stays inside its own lines -- which is how the
-    lines would be drawn on a real gapped chart.
+    Insert one overnight gap: a level shift from a bar in the APPROACH to the
+    end of the window. `extra` arrays (trendlines) shift identically, so the
+    approach and the formation sit at a consistent level either side of it.
+
+    The boundary is confined to bar < GAP_MAX_POS so it can never land inside a
+    formation -- v4 placed it uniformly and corrupted 22% of its own positives
+    that way. See GAP_MAX_POS for the measurements.
 
     Returns everything unchanged when the feature is off or no gap is drawn,
     so roughly a third of windows stay continuous and the gap carries no
     label information.
     """
     if not GAPS or len(closes) < 10 or rng.random() >= GAP_PROB:
-        return (closes, *extra)
+        return (-1, closes, *extra)
     span = float(np.nanmax(closes) - np.nanmin(closes))
     if span <= 1e-9:
-        return (closes, *extra)
+        return (-1, closes, *extra)
     mu, sd = GAP_LOGNORM
     rel = min(float(np.exp(rng.normal(mu, sd))), GAP_MAX_REL)
     amt = rel * span * (1.0 if rng.random() < GAP_UP_PROB else -1.0)
-    p = int(rng.randint(1, len(closes)))          # boundary lands uniformly
+    # Uniform within the APPROACH only (see GAP_MAX_POS). Identical bound for
+    # every family, so gap position carries no label information.
+    hi = len(closes) if GAP_MAX_POS <= 0 else min(GAP_MAX_POS, len(closes))
+    p = int(rng.randint(1, max(hi, 2)))
     out = [closes.copy()]
     out[0][p:] += amt
     for a in extra:
         b = a.copy()
         b[p:] += amt
         out.append(b)
-    return tuple(out)
+    # Position is returned and recorded in every family's meta so the corpus
+    # can be audited for label symmetry directly: gap RATE and gap POSITION
+    # must match across families, or the model learns "gap = wedge".
+    return (p, *out)
 
 
 def _garch_step(rng, vol_t: float, base_sigma: float, persist: float,
@@ -632,8 +665,17 @@ def _anchored_pattern(dataset_idx: int, family: str) -> tuple[pd.DataFrame, dict
     # channel-only until v3, which let wedge positives converge without price
     # ever riding either boundary -- the loophole that let the detector score
     # plain narrowing as a wedge.
-    enforce = (family == POSITIVE_FAMILY
-               and family in ('channel', 'forming_wedge'))
+    # v5: enforced for BOTH families whichever is positive. Scoping it to the
+    # positive class left channel NEGATIVES with price wandering mid-channel,
+    # so their price envelope narrowed even though the designed lines are
+    # parallel -- visually and by fit, indistinguishable from a wedge. Measured
+    # on v5: channel fitted compression median 0.546 against a wedge median of
+    # 0.374, with 56% of channels fitting more converging than 0.6. That is
+    # label noise teaching the model that wedge-shaped price action is
+    # sometimes negative, and it is the likely source of v4's 18.2% channel
+    # false-positive rate. The principle above applies to negatives too: a
+    # channel you cannot draw the lines from is not a channel.
+    enforce = family in ('channel', 'forming_wedge', 'megaphone')
     n_touch_up = n_touch_lo = None
     sig_pat = _vol_profile(rng, n_vis, p['noise_sigma'])
     if not enforce:
@@ -689,8 +731,8 @@ def _anchored_pattern(dataset_idx: int, family: str) -> tuple[pd.DataFrame, dict
     segment[pre_pad:] = 1
     # trendlines shift with price so a formation straddling the boundary
     # stays inside its own lines
-    closes, lower_full, upper_full = _apply_gap(rng, closes, lower_full,
-                                                upper_full)
+    gap_pos, closes, lower_full, upper_full = _apply_gap(rng, closes,
+                                                         lower_full, upper_full)
 
     label = 1 if family == POSITIVE_FAMILY else 0
     df = _assemble(rng, closes, p['noise_sigma'], vols,
@@ -698,7 +740,8 @@ def _anchored_pattern(dataset_idx: int, family: str) -> tuple[pd.DataFrame, dict
 
     m_half = (w_end - w0) / (2.0 * max(n_vis - 1, 1))
     meta = {
-        'dataset_idx': dataset_idx, 'family': family, 'label': label,
+        'dataset_idx': dataset_idx,
+        'gap_pos': gap_pos, 'family': family, 'label': label,
         'total_bars': TOTAL_BARS, 'n_visible': n_vis, 'pre_pad': pre_pad,
         'm_mid': round(m_mid, 6),
         'm_lower': round(m_mid - m_half, 6), 'm_upper': round(m_mid + m_half, 6),
@@ -958,12 +1001,13 @@ def generate_peak_pattern(dataset_idx: int, family: str):
                              fading, p['vol_spike_prob'])
 
     label = 1 if family == POSITIVE_FAMILY else 0
-    closes, lower_full, upper_full = _apply_gap(rng, closes, lower_full, upper_full)
+    gap_pos, closes, lower_full, upper_full = _apply_gap(rng, closes, lower_full, upper_full)
     df = _assemble(rng, closes, p['noise_sigma'], vols,
                    lower_full, upper_full, segment, label)
 
     meta = {
-        'dataset_idx': dataset_idx, 'family': family, 'label': label,
+        'dataset_idx': dataset_idx,
+        'gap_pos': gap_pos, 'family': family, 'label': label,
         'total_bars': TOTAL_BARS, 'n_visible': n_vis, 'pre_pad': pre_pad,
         'n_break': n_break,
         'neck_slope': round(m['neck_slope'], 6),
@@ -994,13 +1038,25 @@ def generate_stale_wedge(dataset_idx: int) -> tuple[pd.DataFrame, dict]:
     p   = _shared_realism_params(rng)
 
     # Budget the window: pre-pad | wedge | breakout | post-pad(>=15%)
-    post_pad = int(rng.randint(int(TOTAL_BARS * 0.15), int(TOTAL_BARS * 0.55) + 1))
-    n_break  = max(3, int(TOTAL_BARS * rng.uniform(0.04, 0.12)))
-    n_wedge  = int(rng.randint(int(TOTAL_BARS * 0.25),
-                               max(int(TOTAL_BARS * 0.25) + 1,
-                                   TOTAL_BARS - post_pad - n_break
-                                   - int(TOTAL_BARS * 0.05) + 1)))
-    pre_pad  = TOTAL_BARS - n_wedge - n_break - post_pad
+    # v5: pre_pad is drawn EXACTLY as the anchored families draw it
+    # (PATTERN_LEN_FRAC), then wedge/breakout/post-pad are budgeted inside the
+    # remaining n_vis. This family previously budgeted the other way round and
+    # its formation could start as early as bar 12 (median 40) against bar 100+
+    # for every other family. With gaps capped at bar 99 (GAP_MAX_POS) that made
+    # stale_wedge the ONLY family able to contain a boundary -- measured at
+    # 55.3% against 0.0% for forming_wedge, channel and megaphone. That is a
+    # label cue teaching "discontinuity inside structured price = negative",
+    # which would reinforce exactly the gap sensitivity the v4 post-mortem
+    # found. Equal pre_pad across families removes it by construction.
+    n_vis    = int(rng.randint(int(TOTAL_BARS * PATTERN_LEN_FRAC[0]),
+                               int(TOTAL_BARS * PATTERN_LEN_FRAC[1]) + 1))
+    pre_pad  = TOTAL_BARS - n_vis
+    n_break  = max(3, int(n_vis * rng.uniform(0.04, 0.10)))
+    post_pad = int(rng.randint(int(n_vis * 0.15), int(n_vis * 0.40) + 1))
+    n_wedge  = n_vis - n_break - post_pad
+    if n_wedge < 30:                       # keep the wedge itself legible
+        post_pad = max(0, n_vis - n_break - 30)
+        n_wedge  = n_vis - n_break - post_pad
 
     w0         = rng.uniform(0.10, 0.30)
     completion = rng.uniform(0.55, 0.85)
@@ -1067,11 +1123,12 @@ def generate_stale_wedge(dataset_idx: int) -> tuple[pd.DataFrame, dict]:
     segment[pre_pad:pre_pad + n_wedge] = 1
     segment[pre_pad + n_wedge:pre_pad + n_wedge + n_break] = 2
 
-    closes, lower_full, upper_full = _apply_gap(rng, closes, lower_full, upper_full)
+    gap_pos, closes, lower_full, upper_full = _apply_gap(rng, closes, lower_full, upper_full)
     df = _assemble(rng, closes, p['noise_sigma'], vols,
                    lower_full, upper_full, segment, label=0)
     meta = {
-        'dataset_idx': dataset_idx, 'family': 'stale_wedge', 'label': 0,
+        'dataset_idx': dataset_idx,
+        'gap_pos': gap_pos, 'family': 'stale_wedge', 'label': 0,
         'total_bars': TOTAL_BARS, 'n_wedge': n_wedge, 'n_break': n_break,
         'pre_pad': pre_pad, 'post_pad': post_pad,
         'm_mid': round(m_mid, 6), 'break_direction': direction,
@@ -1139,12 +1196,13 @@ def generate_compression_walk(dataset_idx: int) -> tuple[pd.DataFrame, dict]:
     vols     += np.abs(rng.normal(0, vol_base * 0.25, TOTAL_BARS))
     vols      = np.abs(vols)
 
-    (closes,) = _apply_gap(rng, closes)
+    gap_pos, closes = _apply_gap(rng, closes)
     df = _assemble(rng, closes, base_sigma, vols,
                    np.full(TOTAL_BARS, np.nan), np.full(TOTAL_BARS, np.nan),
                    np.zeros(TOTAL_BARS, dtype=np.int8), label=0)
     meta = {
-        'dataset_idx': dataset_idx, 'family': 'compression_walk', 'label': 0,
+        'dataset_idx': dataset_idx,
+        'gap_pos': gap_pos, 'family': 'compression_walk', 'label': 0,
         'total_bars': TOTAL_BARS, 'vol_ratio': round(ratio, 4),
         'vol_curve': round(curve, 3), 'drift': round(drift, 6),
         'noise_sigma': round(base_sigma, 4),
@@ -1183,12 +1241,13 @@ def generate_walk(dataset_idx: int) -> tuple[pd.DataFrame, dict]:
     vols     += np.abs(rng.normal(0, vol_base * 0.25, TOTAL_BARS))
     vols      = np.abs(vols)
 
-    (closes,) = _apply_gap(rng, closes)
+    gap_pos, closes = _apply_gap(rng, closes)
     df = _assemble(rng, closes, base_sigma, vols,
                    np.full(TOTAL_BARS, np.nan), np.full(TOTAL_BARS, np.nan),
                    np.zeros(TOTAL_BARS, dtype=np.int8), label=0)
     meta = {
-        'dataset_idx': dataset_idx, 'family': 'walk', 'label': 0,
+        'dataset_idx': dataset_idx,
+        'gap_pos': gap_pos, 'family': 'walk', 'label': 0,
         'total_bars': TOTAL_BARS,
         'regime': ['sideways', 'uptrend', 'downtrend'][regime],
         'drift': round(drift, 6), 'noise_sigma': round(base_sigma, 4),
