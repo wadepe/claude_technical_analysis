@@ -178,10 +178,23 @@ def window_geometry(data: np.ndarray, start: int, fit_bars: int | None) -> dict:
     return fit_wedge_lines(arr)
 
 
-def count_gaps(day_ids: np.ndarray, start: int) -> int:
-    """Overnight boundaries inside a window (0 = window sits within one day)."""
+def gap_info(day_ids: np.ndarray, start: int) -> tuple[int, int]:
+    """
+    Overnight boundaries inside a window.
+
+    Returns (count, position_of_first) where position is the bar index within
+    the window, 0-based, or -1 when the window sits inside a single day.
+
+    Position matters because count alone is nearly binary here: a 250-bar
+    window inside a 390-bar session contains a boundary if and only if it ends
+    before session minute 250, so "spans a gap" and "ends early in the
+    session" are the same statement. Where the gap SITS separates them -- a
+    gap at bar 10 leaves 240 bars of clean intraday structure after it, while
+    one at bar 200 puts the discontinuity inside the fitted span.
+    """
     d = day_ids[start: start + N_BARS]
-    return int((d[1:] != d[:-1]).sum())
+    edges = np.where(d[1:] != d[:-1])[0] + 1
+    return len(edges), (int(edges[0]) if len(edges) else -1)
 
 
 # =============================================================================
@@ -390,6 +403,166 @@ def geometry_report(events: list[dict], pop_conv: np.ndarray,
     return '\n'.join(lines)
 
 
+def vol_trend(data: np.ndarray, starts: np.ndarray,
+              fit_bars: int | None) -> np.ndarray:
+    """
+    Realized volatility trend for every window: std of returns over the last
+    third of the fitted span divided by std over the first third. < 1 means
+    the window goes quiet, > 1 means it builds.
+
+    Computed from cumulative sums so all 1.3M windows cost one pass rather
+    than a Python loop.
+    """
+    close = data[:, 3].astype(np.float64)
+    r  = np.diff(close, prepend=close[0])
+    # Centre before accumulating. std is translation-invariant, so this does
+    # not change the result, but it keeps the sum-of-squares small and avoids
+    # catastrophic cancellation in s2/n - (s1/n)^2 over a 1.3M-bar cumsum.
+    r  = r - r.mean()
+    c1 = np.concatenate([[0.0], np.cumsum(r)])
+    c2 = np.concatenate([[0.0], np.cumsum(r * r)])
+
+    def _std(a: np.ndarray, b: np.ndarray) -> np.ndarray:
+        n   = np.maximum(b - a, 1)
+        s1  = c1[b] - c1[a]
+        s2  = c2[b] - c2[a]
+        return np.sqrt(np.maximum(s2 / n - (s1 / n) ** 2, 0.0))
+
+    fb  = N_BARS if not fit_bars else min(int(fit_bars), N_BARS)
+    off = N_BARS - fb
+    k   = max(fb // 3, 2)
+    early = _std(starts + off, starts + off + k)
+    late  = _std(starts + N_BARS - k, starts + N_BARS)
+    return np.where(early > 1e-12, late / np.maximum(early, 1e-12), np.nan)
+
+
+def volatility_report(pos_vr: np.ndarray, win_vr: np.ndarray,
+                      ev_conv: np.ndarray, ev_vr: np.ndarray) -> str:
+    """
+    Is the model finding quiet windows rather than wedges?
+
+    This is the v2 defect restated: detection rate tracked the intraday
+    range-compression curve, 27.2% where windows compress against 0.12% where
+    they widen, and "the model was finding the morning, not wedges". The v4
+    corpus draws the SAME volatility profile for every family so decay carries
+    no label information -- but the corpus cannot prove the model ignores it on
+    real bars, and VOL_DECAY_PROB = 0.75 puts decay in three quarters of every
+    family's windows. This measures it directly, as a rate per window scanned.
+
+    The last block is the one that matters for the geometry columns: envelope
+    convergence and volatility decay are confounded by construction, because a
+    narrowing high/low envelope is what _envelope_fit reads as convergence
+    whichever way the trendlines run. A strong correlation here means the
+    reported compression is measuring quiet, not shape.
+    """
+    edges = np.array([0.0, 0.5, 0.75, 1.0, 1.5, np.inf])
+    names = ['< 0.50 (quiet)', '0.50-0.75', '0.75-1.00',
+             '1.00-1.50', '> 1.50 (building)']
+    ok_w = np.isfinite(win_vr)
+    ok_p = np.isfinite(pos_vr)
+    w_h  = np.histogram(win_vr[ok_w], bins=edges)[0]
+    p_h  = np.histogram(pos_vr[ok_p], bins=edges)[0]
+    rate = np.divide(p_h, w_h, out=np.full(len(w_h), np.nan), where=w_h > 0)
+    overall = p_h.sum() / max(w_h.sum(), 1)
+
+    lines = ['', 'VOLATILITY TREND OF DETECTIONS', '=' * 78,
+             '  std(returns, last third of fitted span) / std(first third)',
+             '  < 1 = window goes quiet.  Corpus draws decay in ~75% of EVERY '
+             'family.', '',
+             f'  {"band":<20}{"windows":>12}{"detections":>12}{"rate":>11}'
+             f'{"vs mean":>10}']
+    lines.append('  ' + '-' * 65)
+    for i, nm in enumerate(names):
+        if w_h[i] == 0:
+            continue
+        rel = rate[i] / overall if overall > 0 else float('nan')
+        lines.append(f'  {nm:<20}{w_h[i]:>12,}{p_h[i]:>12,}{rate[i]:>11.5f}'
+                     f'{rel:>9.2f}x')
+
+    valid = rate[np.isfinite(rate)]
+    nz    = valid[valid > 0]
+    swing = (valid.max() / nz.min()) if len(nz) else float('inf')
+    lines += [
+        '',
+        f'  median volatility trend : detections '
+        f'{np.nanmedian(pos_vr):.3f}   population {np.nanmedian(win_vr):.3f}',
+        f'  busiest/quietest band   : {swing:.1f}x   '
+        f'(a detector indifferent to volatility is ~1x)',
+    ]
+
+    m = np.isfinite(ev_conv) & np.isfinite(ev_vr)
+    if m.sum() > 5:
+        r = float(np.corrcoef(ev_vr[m], ev_conv[m])[0, 1])
+        lines += [
+            '',
+            f'  corr(volatility trend, fitted convergence) over events: '
+            f'r = {r:+.3f}',
+            '    Convergence and decay are confounded by construction: a',
+            '    narrowing high/low envelope reads as convergence whichever',
+            '    way the trendlines run. |r| well above ~0.3 means the reported',
+            '    compression is largely measuring quiet, not shape.',
+        ]
+    return '\n'.join(lines)
+
+
+def gap_position_report(events: list[dict], pop_pos: np.ndarray,
+                        fit_bars: int | None) -> str:
+    """
+    WHERE the overnight gap sits inside detected windows, against the
+    background of where it sits in all gap-spanning windows.
+
+    "Spans a gap" is nearly the same statement as "ends before session minute
+    250", so it cannot separate a gap effect from a clock effect. Position
+    can: if detections merely inherit the population's gap placement, the
+    model is indifferent to the discontinuity and the concentration is a
+    clock artefact. If they pile up at one end, the gap itself is the cue.
+    """
+    ev = np.array([e['gap_pos'] for e in events if e['gap_pos'] >= 0])
+    pop = pop_pos[pop_pos >= 0]
+    lines = ['', 'GAP POSITION WITHIN THE WINDOW', '=' * 78,
+             f'  bar index of the overnight boundary, 0 = left edge, '
+             f'{N_BARS - 1} = right edge']
+    if len(ev) == 0 or len(pop) == 0:
+        lines.append('  no gap-spanning windows to compare')
+        return '\n'.join(lines)
+
+    fb  = N_BARS if not fit_bars else min(int(fit_bars), N_BARS)
+    off = N_BARS - fb
+    lines += [
+        f'  fitted span starts at bar {off}, so a gap below that is in the '
+        f'approach,',
+        f'  and one above it sits INSIDE the fitted envelope.',
+        '',
+        f'  {"":<12}{"detections":>12}{"population":>12}',
+        f'  {"median":<12}{np.median(ev):>12.0f}{np.median(pop):>12.0f}',
+        f'  {"mean":<12}{ev.mean():>12.1f}{pop.mean():>12.1f}',
+    ]
+    for p in (10, 25, 75, 90):
+        lines.append(f'  {"p" + str(p):<12}{np.percentile(ev, p):>12.0f}'
+                     f'{np.percentile(pop, p):>12.0f}')
+
+    edges = np.array([0, 25, 50, 100, 130, 175, 250])
+    e_h = np.histogram(ev, bins=edges)[0] / len(ev)
+    p_h = np.histogram(pop, bins=edges)[0] / len(pop)
+    lines += ['', f'  {"gap at bar":<14}{"detections":>12}{"population":>12}'
+                  f'{"enrichment":>12}']
+    lines.append('  ' + '-' * 48)
+    for i in range(len(edges) - 1):
+        enr = e_h[i] / p_h[i] if p_h[i] > 0 else float('nan')
+        lines.append(f'  {str(edges[i]) + "-" + str(edges[i+1]-1):<14}'
+                     f'{e_h[i]*100:>11.1f}%{p_h[i]*100:>11.1f}%{enr:>11.2f}x')
+
+    inside_e = float((ev >= off).mean())
+    inside_p = float((pop >= off).mean())
+    lines += [
+        '',
+        f'  gap inside the fitted span (bar >= {off}): '
+        f'detections {inside_e*100:.1f}%  population {inside_p*100:.1f}%  '
+        f'({inside_e/max(inside_p,1e-9):.2f}x)',
+    ]
+    return '\n'.join(lines)
+
+
 # =============================================================================
 # Main
 # =============================================================================
@@ -475,7 +648,7 @@ def main() -> None:
     for e in events:
         e['geometry']        = window_geometry(data, e['start_idx'], args.fit_bars)
         e['session_minute']  = int(minutes[e['end_idx']])
-        e['n_gaps']          = count_gaps(day_ids, e['start_idx'])
+        e['n_gaps'], e['gap_pos'] = gap_info(day_ids, e['start_idx'])
 
     # Background geometry baseline from random windows.
     rng     = np.random.default_rng(args.seed)
@@ -484,10 +657,25 @@ def main() -> None:
     print(f'Fitting geometry on {len(sample):,} background windows ...')
     pop_conv = np.array([window_geometry(data, int(s), args.fit_bars)['convergence']
                          for s in sample])
-    pop_gap  = float(np.mean([count_gaps(day_ids, int(s)) > 0 for s in sample]))
+    pop_gapinfo = [gap_info(day_ids, int(s)) for s in sample]
+    pop_gap  = float(np.mean([n > 0 for n, _ in pop_gapinfo]))
+    pop_pos  = np.array([p for _, p in pop_gapinfo])
     ev_gap   = float(np.mean([e['n_gaps'] > 0 for e in events]))
 
     report.append(geometry_report(events, pop_conv, n_years, ev_gap, pop_gap))
+    report.append(gap_position_report(events, pop_pos, args.fit_bars))
+
+    # Volatility trend over EVERY window scanned, so the by-band figure is a
+    # rate and not just a picture of where windows happen to fall.
+    win_vr = vol_trend(data, all_starts, args.fit_bars)
+    pos_vr = vol_trend(data, np.array([p['start_idx'] for p in positives]),
+                       args.fit_bars)
+    ev_vr  = vol_trend(data, np.array([e['start_idx'] for e in events]),
+                       args.fit_bars)
+    for e, v in zip(events, ev_vr):
+        e['vol_trend'] = float(v)
+    ev_conv = np.array([e['geometry']['convergence'] for e in events])
+    report.append(volatility_report(pos_vr, win_vr, ev_conv, ev_vr))
 
     # ── Test 3: charts ───────────────────────────────────────────────────────
     pick   = rng.choice(len(events), size=min(args.n_charts, len(events)),
@@ -517,6 +705,8 @@ def main() -> None:
         'score'         : e['score'],
         'session_minute': e['session_minute'],
         'n_gaps'        : e['n_gaps'],
+        'gap_pos'       : e['gap_pos'],
+        'vol_trend'     : e['vol_trend'],
         'convergence'   : e['geometry']['convergence'],
         'travel_upper'  : e['geometry']['travel_upper'],
         'travel_lower'  : e['geometry']['travel_lower'],
@@ -546,6 +736,8 @@ def main() -> None:
         'gap_share'      : ev_gap,
         'gap_share_pop'  : pop_gap,
         'gap_rate_ratio' : ev_gap / max(pop_gap, 1e-9),
+        'vol_trend_median'     : float(np.nanmedian(ev_vr)),
+        'vol_trend_median_pop' : float(np.nanmedian(win_vr)),
     }, indent=2))
     print(f'\nSaved: {out / "detection_study.txt"}, events.csv, summary.json')
 
