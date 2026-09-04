@@ -155,6 +155,22 @@ class Handler(BaseHTTPRequestHandler):
         self._send(200, {'ok': True, 'db': self.db_path, **counts,
                          'last_bar': last})
 
+    # Columns added to `signals` after the original schema. They are selected
+    # only when the DB actually has them: wedge_db._add_missing_stat_columns
+    # adds them when live_monitor starts, so an API restarted BEFORE the monitor
+    # migrates would otherwise 500 on every /signals request. Degrading keeps
+    # the endpoint honest -- absent column means absent data, not a dead API.
+    _OPTIONAL_SIGNAL_COLS = ('convergence', 'touch_up', 'touch_lo',
+                             'max_excursion')
+
+    def _signals_query(self, con) -> str:
+        have = {r[1] for r in con.execute('PRAGMA table_info(signals)')}
+        extra = [c for c in self._OPTIONAL_SIGNAL_COLS if c in have]
+        base = _TABLES['signals']
+        if not extra:
+            return base
+        return base.replace(' FROM signals', ', ' + ', '.join(extra) + ' FROM signals')
+
     def _table(self, table: str, qs: dict) -> None:
         # window/pattern filters are meaningless for bars — reject early so a
         # typo'd query fails loudly instead of silently returning everything.
@@ -165,7 +181,9 @@ class Handler(BaseHTTPRequestHandler):
         try:
             # Newest rows win the limit; outer query restores ascending order.
             cur = con.execute(
-                f'SELECT * FROM ({_TABLES[table]}{where} '
+                f'SELECT * FROM ('
+                f'{self._signals_query(con) if table == "signals" else _TABLES[table]}'
+                f'{where} '
                 f'ORDER BY ts DESC LIMIT ?) ORDER BY ts',
                 params + [limit])
             rows = _rows_to_dicts(cur)
