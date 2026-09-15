@@ -161,6 +161,45 @@ VOL_DECAY_RNG    = (0.20, 0.55)    # end/start sigma ratio when decaying
 VOL_RISE_RNG     = (1.20, 3.00)    # ... and when building
 VOL_CURVE_RNG    = (0.70, 1.80)
 
+# -- v6 ATTEMPT, DID NOT WORK. Kept with its negative result, default OFF. ----
+# The bimodal draw above never produces a ratio between 0.55 and 1.20, and 43.2%
+# of real SPY 250-bar windows land exactly there. Measured on 30,000 real
+# windows, std(returns, last third)/std(first third) is a clean lognormal
+# centred on 1.0: geometric mean 1.005, p5 0.323, p50 0.981, p95 3.256.
+#
+# Replacing the draw with lognormal(0, 1.10) looked like a 9.5x KS improvement
+# (0.405 -> 0.043) when simulated over GAUSSIAN returns. IT DOES NOT TRANSFER.
+# Measured on actual smoke corpora, KS went only 0.354 -> 0.318 for megaphone
+# and 0.511 -> 0.453 for forming_wedge -- a tenth of the predicted gain.
+#
+# The reason is that `ratio` is NOT what drives the realised volatility trend in
+# a generated window. GARCH persistence (vol_persist 0.45-0.80), fat tails
+# (fat_prob to 0.10 at fat_mult to 5.0), momentum and trendline mean-reversion
+# all sit on top of the profile and swamp it. Real SPY's sigma ratio spans ~10x
+# p5-to-p95 (0.33-3.28); the corpus spans 500-1000x (0.01 to 9-19). The corpus
+# volatility is far more erratic than the market's, and that is a property of
+# those dynamics, not of this parameter.
+#
+# So: do NOT regenerate expecting this to fix anything. The megaphone saturation
+# (model scores >=0.5 on 95% of real bars while separating cleanly on held-out
+# corpus data) traces to real windows sitting ABOVE every corpus family's median
+# ratio, and the lognormal narrows that gap without closing it. Fixing it means
+# calibrating vol_persist / fat_prob / fat_mult / noise_sigma against real bars.
+#
+# Default 0 = the original bimodal draw, so every existing corpus stays
+# byte-reproducible. Set WEDGE_VOL_RATIO_LOGSD=1.10 to try the lognormal.
+VOL_RATIO_LOGSD  = float(os.environ.get('WEDGE_VOL_RATIO_LOGSD', '0'))
+VOL_RATIO_CLIP   = (0.10, 8.0)
+
+
+def _draw_vol_ratio(rng) -> float:
+    """End/start sigma ratio for one window. Lognormal when LOGSD > 0."""
+    if VOL_RATIO_LOGSD > 0:
+        return float(np.clip(np.exp(rng.normal(0.0, VOL_RATIO_LOGSD)),
+                             *VOL_RATIO_CLIP))
+    return float(rng.uniform(*VOL_DECAY_RNG) if rng.random() < VOL_DECAY_PROB
+                 else rng.uniform(*VOL_RISE_RNG))
+
 # -- v4: overnight gaps -------------------------------------------------------
 # The corpus is continuous; real 250-bar windows are stitched across session
 # boundaries and 64% contain an overnight jump. Measured on SPY 2008-2021
@@ -262,8 +301,7 @@ def _vol_profile(rng, n: int, base_sigma: float) -> np.ndarray:
     """
     if not VOL_PROFILE or n <= 0:
         return np.full(max(n, 0), base_sigma)
-    ratio = (rng.uniform(*VOL_DECAY_RNG) if rng.random() < VOL_DECAY_PROB
-             else rng.uniform(*VOL_RISE_RNG))
+    ratio = _draw_vol_ratio(rng)
     curve = rng.uniform(*VOL_CURVE_RNG)
     scale = np.linspace(1.0, 0.0, n) ** curve
     return base_sigma * (ratio + (1.0 - ratio) * scale)
@@ -1172,8 +1210,7 @@ def generate_compression_walk(dataset_idx: int) -> tuple[pd.DataFrame, dict]:
     momentum_str = rng.uniform(0.05, 0.25)
     vol_persist  = rng.uniform(0.45, 0.80)
 
-    ratio = (rng.uniform(*VOL_DECAY_RNG) if rng.random() < VOL_DECAY_PROB
-             else rng.uniform(*VOL_RISE_RNG))
+    ratio = _draw_vol_ratio(rng)
     curve = rng.uniform(*VOL_CURVE_RNG)
     scale = np.linspace(1.0, 0.0, TOTAL_BARS) ** curve
     sigma_t = base_sigma * (ratio + (1.0 - ratio) * scale)

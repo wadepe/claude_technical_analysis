@@ -178,7 +178,12 @@ APEX_GATE_MAX_MIN = 360
 # calibrated against the v5 corpus at fit_bars=100 rather than chosen by eye --
 # the first hand-picked excursion threshold was wrong by 8x and rejected 100%
 # of detections. Re-derive them if fit_bars changes.
+# Gate defaults. A formation overrides any of them via FORMATIONS[..]['gate'].
+# These are the WEDGE values; they are not universal, and assuming they were is
+# why the gate had to become per-formation -- a channel is parallel by
+# definition, so a convergence FLOOR of 0.5 rejects 100% of real channels.
 QUALITY_MIN_CONVERGENCE = 0.5    # below this the envelope is a channel
+QUALITY_MAX_CONVERGENCE = None   # None = no ceiling (wedges can converge freely)
 QUALITY_MIN_TOUCHES     = 5      # per side; designed-wedge p10, walks reach 2
 QUALITY_MAX_EXCURSION   = 1.83   # mean-widths; designed-wedge p95 at fit_bars=100
 QUALITY_TOUCH_TOL_FRAC  = 0.18   # a touch is within this fraction of the width
@@ -257,10 +262,26 @@ FORMATIONS = {
                    'threshold': 0.8, 'apex_gate': True,
                    'geometry': 'envelope', 'log_only': False,
                    'quality_gate': True, 'fit_bars': 100},
+    # v6 channel (deployed 2026-09-15). New model trained on the chanmega corpus.
+    #
+    # fit_bars=100 was re-derived on that corpus, NOT inherited: the wedge method
+    # (maximise designed-vs-fitted convergence) is meaningless here because a
+    # channel is parallel, so its designed convergence is ~constant. Swept slope
+    # and width recovery instead -- mean r(slope, width) peaks at 0.912 at 100.
+    #
+    # The gate is a two-sided BAND, not the wedge's floor. A convergence floor of
+    # 0.5 would reject every real channel. Validated on the 275 live detections
+    # over SPY 2008-2021, not just on corpus percentiles: 19.3% pass, and the
+    # rejects are visibly converging triangles (conv +0.43 to +0.85) and
+    # diverging megaphones (-2.4 to -2.8) that the model wrongly called channels.
+    # That is the model over-firing, not the gate being strict -- but it does mean
+    # ~3.9 gated events/yr.
     'channel':    {'windows': (250,),    'run_dir': 'runs_channel',
                    'threshold': 0.9, 'apex_gate': False,
                    'geometry': 'envelope', 'log_only': False,
-                   'fit_bars': None},
+                   'quality_gate': True, 'fit_bars': 100,
+                   'gate': {'min_conv': -0.30, 'max_conv': 0.35,
+                            'min_touches': 5, 'max_exc': None}},
     'hs':         {'windows': (250,),    'run_dir': 'runs_hs',
                    'threshold': 0.9, 'apex_gate': False,
                    'geometry': None,      'log_only': True,
@@ -890,10 +911,21 @@ def _wedge_stats(window_deque: deque, score: Optional[float],
 
         touch_up = _runs(arr[:, 1] >= up - tol)
         touch_lo = _runs(arr[:, 2] <= lo + tol)
-        quality_ok = (g['convergence'] >= QUALITY_MIN_CONVERGENCE
-                      and touch_up >= QUALITY_MIN_TOUCHES
-                      and touch_lo >= QUALITY_MIN_TOUCHES
-                      and max_exc <= QUALITY_MAX_EXCURSION)
+
+        # Per-formation thresholds, falling back to the wedge defaults above.
+        gcfg     = FORMATIONS[pattern].get('gate', {})
+        min_conv = gcfg.get('min_conv', QUALITY_MIN_CONVERGENCE)
+        max_conv = gcfg.get('max_conv', QUALITY_MAX_CONVERGENCE)
+        min_tch  = gcfg.get('min_touches', QUALITY_MIN_TOUCHES)
+        max_ex   = gcfg.get('max_exc', QUALITY_MAX_EXCURSION)
+
+        quality_ok = (touch_up >= min_tch and touch_lo >= min_tch)
+        if min_conv is not None:
+            quality_ok = quality_ok and g['convergence'] >= min_conv
+        if max_conv is not None:
+            quality_ok = quality_ok and g['convergence'] <= max_conv
+        if max_ex is not None:
+            quality_ok = quality_ok and max_exc <= max_ex
 
     apex_ok = converging if FORMATIONS[pattern]['apex_gate'] else True
     gate_ok = apex_ok and quality_ok
