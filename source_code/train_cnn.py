@@ -248,16 +248,26 @@ def main() -> None:
     parser.add_argument('--batch-size',      type=int,   default=128)
     parser.add_argument('--lr',              type=float, default=1e-3,
                         help='Initial learning rate (default: 0.001)')
+    parser.add_argument('--models-dir', default=None,
+                        help='where to write weights (default <data-dir>/models); use it to keep several models trained from one corpus apart')
+    parser.add_argument('--positive-family', default=None,
+                        help='re-label the corpus for this family instead of '
+                             'using the parquet label; lets one corpus train '
+                             'several models and reuse the cached X arrays')
     parser.add_argument('--no-cache',        action='store_true',
                         help='Force reload from parquet even if numpy cache exists')
     parser.add_argument('--preprocess-only', action='store_true',
                         help='Build numpy cache files then exit without training')
     args = parser.parse_args()
 
-    root       = Path(args.data_dir)
-    models_dir = root / 'models'
+    root = Path(args.data_dir)
+    # --models-dir keeps several models trained from ONE corpus apart. Without
+    # it a second --positive-family run overwrites the first model's weights,
+    # since both resolve to <corpus>/models. cache_dir is deliberately NOT
+    # redirected: sharing the cached X arrays is the entire point.
+    models_dir = Path(args.models_dir) if args.models_dir else root / 'models'
     cache_dir  = root / 'numpy_cache'
-    models_dir.mkdir(exist_ok=True)
+    models_dir.mkdir(parents=True, exist_ok=True)
 
     # ── Load and validate manifest ────────────────────────────────────────────
     manifest_path = root / 'corpus_manifest.json'
@@ -298,6 +308,37 @@ def main() -> None:
     force = args.no_cache
     X_train, y_train = get_split(train_entries, root, cache_dir, 'train', force)
     X_val,   y_val   = get_split(val_entries,   root, cache_dir, 'val',   force)
+
+    # --positive-family re-labels an existing corpus instead of regenerating it.
+    #
+    # The WINDOWS a family produces do not depend on which family is positive:
+    # generation is seeded per (family, dataset_idx), and since v5 touch
+    # enforcement keys on the family itself rather than on the positive class.
+    # Only the label differs. So one corpus holding both channel and megaphone
+    # in quantity trains a channel model AND a megaphone model, with the second
+    # run reusing the first's cached X arrays -- saving a ~64 min corpus
+    # generation and a ~75 min parquet load per additional family.
+    #
+    # y is rebuilt from the manifest's `type`, overriding the label baked into
+    # each parquet at generation time. X is untouched, which is why the cache
+    # is reusable: _cache_paths stores X and y in separate files.
+    if args.positive_family:
+        fam     = args.positive_family
+        present = {e['type'] for e in manifest}
+        if fam not in present:
+            raise ValueError(
+                f'--positive-family {fam!r} is not in this corpus. '
+                f'Present: {sorted(present)}')
+        y_train = np.array([1.0 if e['type'] == fam else 0.0
+                            for e in train_entries], dtype=np.float32)
+        y_val   = np.array([1.0 if e['type'] == fam else 0.0
+                            for e in val_entries], dtype=np.float32)
+        print(f'\nRE-LABELLED for positive family {fam!r} '
+              f'(parquet labels ignored)')
+        print(f'  train positives: {int(y_train.sum()):,} / {len(y_train):,} '
+              f'({y_train.mean() * 100:.1f}%)')
+        print(f'  val   positives: {int(y_val.sum()):,} / {len(y_val):,} '
+              f'({y_val.mean() * 100:.1f}%)')
 
     if args.preprocess_only:
         print('\nPreprocessing complete. Exiting (--preprocess-only).')
